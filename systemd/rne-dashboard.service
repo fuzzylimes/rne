@@ -1,0 +1,17 @@
+[Unit]
+Description=rne dashboard
+After=network.target
+ConditionPathExists=/mnt/media
+
+[Service]
+Type=simple
+User=rip
+Group=mediagroup
+ExecStart=/home/rip/.local/bin/rne-dashboard
+Restart=on-failure
+RestartSec=5
+Environment=HOME=/home/rip
+Environment=RNE_DB=/home/rip/.local/state/rne/jobs.db
+
+[Install]
+WantedBy=multi-user.target

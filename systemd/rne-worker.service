@@ -1,0 +1,20 @@
+[Unit]
+Description=rne encoder worker
+After=network.target
+ConditionPathExists=/mnt/media
+
+[Service]
+Type=simple
+User=rip
+Group=mediagroup
+ExecStart=/home/rip/.local/bin/rne-worker
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+KillSignal=SIGTERM
+Nice=10
+Environment=HOME=/home/rip
+Environment=RNE_DB=/home/rip/.local/state/rne/jobs.db
+
+[Install]
+WantedBy=multi-user.target
