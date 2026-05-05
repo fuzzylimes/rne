@@ -1,4 +1,4 @@
-# rne — Rip-and-Zip Pipeline
+# rne — Rip-and-Encode Pipeline
 
 A personal media pipeline that takes a Blu-ray or DVD from disc to encoded MKV with minimal user error and no babysitting. Combines ripping (MakeMKV), probing (ffprobe), and encoding (HandBrake) into a unified queue with a worker daemon and a lightweight dashboard.
 
@@ -176,57 +176,52 @@ INSERT INTO queue_settings (id) VALUES (1);
 
 Stored as JSON, not a pre-rendered shell command. The worker re-renders the HandBrake command from this JSON on every claim, sharing rendering code with the ingest CLI. Adding new fields later doesn't require migrating old rows.
 
-Initial shape, covering the current x265 + slow-preset Blu-ray workflow:
-
 ```json
 {
   "encoder": "x265",
   "quality": 20,
   "preset": "slow",
-  "audio_tracks": [1],
-  "audio_codec": "copy",
+  "audio_tracks": [
+    {"track": 1, "codec": "ac3",  "bitrate": 640},
+    {"track": 2, "codec": "copy"}
+  ],
   "subtitle_tracks": [],
   "decomb": false,
   "extra_args": []
 }
 ```
 
+`audio_tracks` is a list of per-track objects, not a list of indexes. Each entry carries its own copy/transcode decision so a single ingest can mix copied and transcoded tracks (the common Blu-ray case: copy the AC3 stereo track, transcode the TrueHD 5.1 to AC3 5.1).
+
+`AudioTrack` fields:
+- `track` — 1-based stream index from the source file. Required.
+- `codec` — `"copy"` to mux as-is, or a HandBrake encoder name (`"ac3"`, `"eac3"`, `"aac"`, etc.). Defaults to `"copy"` if omitted.
+- `bitrate` — integer kbps, required when `codec` is anything other than `"copy"`. Rejected (validation error) when `codec == "copy"`. No default; the ingest CLI fills this in based on channel count when it builds the args, but `handbrake.py` does not infer it.
+
 `extra_args` is the escape hatch for one-off flags without changing schema.
 
-### Critical queries
+### Audio codec policy
 
-**Worker claim** (atomic — also acts as the loop-tick when nothing's queued):
+Track selection is the user's decision. Whether a selected track gets copied or transcoded is determined by its source codec:
 
-```sql
-UPDATE jobs
-SET    status        = 'running',
-       started_at    = CURRENT_TIMESTAMP,
-       attempt_count = attempt_count + 1,
-       progress_pct  = NULL,
-       progress_fps  = NULL,
-       progress_eta  = NULL,
-       exit_code     = NULL,
-       error_message = NULL
-WHERE  id = (
-    SELECT id FROM jobs
-    WHERE  status = 'queued'
-    ORDER BY priority ASC, id ASC
-    LIMIT  1
-)
-RETURNING id, source_path, output_path, handbrake_args;
+**Copy-friendly codecs** — copy by default, no prompt. These play universally on Jellyfin clients (TVs, phones, browsers):
+
+```python
+COPY_FRIENDLY_AUDIO_CODECS = frozenset({"ac3", "eac3", "aac", "mp3", "opus"})
 ```
 
-**Orphan reconciliation** (run once on worker startup, before the main loop):
+**Anything else triggers a transcode prompt** during ingest. This includes TrueHD, DTS, DTS-HD MA, DTS-HD HRA, PCM, FLAC. The recommendation is always AC3 at a channel-appropriate bitrate, since AC3 has the broadest playback support:
 
-```sql
-UPDATE jobs
-SET    status        = 'interrupted',
-       finished_at   = CURRENT_TIMESTAMP,
-       error_message = 'worker did not finish; reconciled on startup'
-WHERE  status = 'running';
-```
+| Source channels | Recommended AC3 bitrate |
+|---|---|
+| 1.0 (mono) | 96 kbps |
+| 2.0 (stereo) | 192 kbps |
+| 5.1 | 640 kbps |
+| 7.1 | 640 kbps (AC3 max) |
 
-Anything still showing `running` has no live process owning it. The previous worker either crashed, was killed, or the VM rebooted. Mark them interrupted, leave the `.partial` output on disk for inspection, move on. The dashboard surfaces these with a retry button.
+Both sets live in `config.py` as tunable constants. To treat DTS as copy-friendly, add `"dts"` to the set; the ingest CLI re-reads the constant on every run.
+
+The prompt itself only appears when the source codec is *not* in `COPY_FRIENDLY_AUDIO_CODECS`. For DVDs (where AC3 is universal), the user never sees the prompt. For Blu-rays with a TrueHD or DTS-HD track, the prompt appears once per non-friendly track.
 
 ## Project layout
 
@@ -240,9 +235,9 @@ rne/
 └── src/rne/
     ├── __init__.py
     ├── __main__.py          # python -m rne dispatch
-    ├── config.py            # paths, env defaults
+    ├── config.py            # paths, env defaults, codec policy
     ├── db.py                # connect(), pragmas, schema init, common queries
-    ├── models.py            # Job dataclass, JobStatus enum, HandbrakeArgs
+    ├── models.py            # Job, AudioTrack, HandbrakeArgs, JobStatus
     ├── handbrake.py         # args JSON → command list (pure function)
     ├── probe.py             # ffprobe wrapper, stream summary
     ├── makemkv.py           # makemkvcon wrapper
@@ -269,17 +264,17 @@ rne/
 
 ### Module ownership
 
-- **`config.py`** — flat module of constants. Things like `DB_PATH`, `STAGING_ROOT`, `MEDIA_ROOT`, default minlength, default ffprobe timeout, the flatpak HandBrake invocation prefix. Override via env vars when needed. Not pydantic, not yaml. When the project grows past 10 settings, revisit.
+- **`config.py`** — flat module of constants. Things like `DB_PATH`, `STAGING_ROOT`, `MEDIA_ROOT`, default minlength, default ffprobe timeout, the flatpak HandBrake invocation prefix, `COPY_FRIENDLY_AUDIO_CODECS`, `AC3_BITRATE_BY_CHANNELS`. Override via env vars where appropriate. Not pydantic, not yaml. When the project grows past 10 settings, revisit.
 - **`db.py`** — owns everything sqlite. Schema as a `SCHEMA_SQL` constant, `init_db()` that runs it idempotently, `connect()` that applies pragmas. Thin functions like `claim_next_job()`, `update_progress(...)`, `mark_done(...)`. No ORM. `sqlite3.Row` row factory. One-off queries can stay inline at the call site.
-- **`models.py`** — dataclasses mirroring the columns, with `from_row(row)` classmethods. `JobStatus` is a `StrEnum`. Separate `HandbrakeArgs` dataclass with `to_json()` / `from_json()`.
-- **`handbrake.py`** — pure. Takes a `HandbrakeArgs` and source path, returns `["HandBrakeCLI", "-i", ...]`. No subprocess, no DB, no I/O. The flatpak prefix from `config.py` is prepended here.
-- **`probe.py`** — port of `mkvprobe-format.py`. `summarize(mkv_path) → StreamSummary`. The table-printing logic moves into `cli/ingest.py`.
+- **`models.py`** — dataclasses mirroring the columns, with `from_row(row)` classmethods. `JobStatus` is a `StrEnum`. `HandbrakeArgs` and the nested `AudioTrack` dataclass with `to_json()` / `from_json()`.
+- **`handbrake.py`** — pure. Takes a `HandbrakeArgs` and source path, returns `["HandBrakeCLI", "-i", ...]`. No subprocess, no DB, no I/O. The flatpak prefix from `config.py` is prepended here. Validates `AudioTrack` entries: bitrate required when codec != "copy", rejected when codec == "copy".
+- **`probe.py`** — port of `mkvprobe-format.py`. `summarize(mkv_path) → StreamSummary`. The `AudioStream` summary includes `codec`, `channels`, `bitrate`, `language`, `title`, `default`, `forced`. The table-printing logic moves into `cli/ingest.py`.
 - **`makemkv.py`** — port of `mkvrip`'s parser (the `parse_info`, `summarize`, `parse_index_spec` functions). The interactive prompting moves into `cli/ingest.py`.
 - **`worker/runner.py`** — `subprocess.Popen` of HandBrake, parses progress, captures stderr ring buffer, handles `.partial` rename.
 - **`worker/daemon.py`** — main loop. Reconcile orphans → loop forever: check pause, claim, run, repeat.
 - **`worker/heartbeat.py`** — daemon thread. Updates `worker_status.last_seen` every 10s.
 - **`dashboard/app.py`** — Flask factory and `main()` (binds `0.0.0.0:8500`).
-- **`dashboard/routes.py`** — four handlers, each ~5 lines. POST handlers return `redirect('/', 303)` (PRG pattern).
+- **`dashboard/routes.py`** — six handlers, each ~5 lines. POST handlers return `redirect('/', 303)` (PRG pattern).
 
 ### pyproject.toml
 
@@ -404,7 +399,7 @@ Never silently queue a partial batch.
 Run `ffprobe` on file 1, print the video/audio/subtitle table. Extends the existing `mkvprobe-format.py` output:
 
 - **Video**: as today (codec, resolution, fps, field order, lang, default, forced).
-- **Audio**: add a **Bitrate** column. Free from `stream.bit_rate` (always present for AC3/DTS, sometimes missing for TrueHD where it's container-level — fall back to format-level bitrate divided across audio streams, or leave blank). This catches the common Blu-ray case where two tracks are both labeled AC3 but one is 10× the bitrate of the other.
+- **Audio**: add a **Bitrate** column and a **Channels** column. Bitrate is read from `stream.bit_rate` (always present for AC3/DTS, sometimes missing for TrueHD where it's container-level — fall back to format-level bitrate divided across audio streams, or leave blank). Channels from `stream.channels`. Bitrate catches the common Blu-ray case where two tracks are both labeled AC3 but one is 10× the other; channels feeds the transcode-bitrate recommendation in step 6.
 - **Subtitles**: add a **Duration** column. ffprobe reports stream duration from the header for free. Full subtitle tracks span the movie's duration; forced subtitle tracks span much less (sum of forced display times). This is a free, reliable signal for forced-vs-full classification — the `forced` disposition flag from MakeMKV has been observed to be unreliable.
 
 **Deep packet scan is opt-in only.** The full `-count_packets` scan exists as a separate `rne probe --deep <file>` command with a 60s timeout. It is not run automatically — observed to take >5 minutes on a 30 GB Blu-ray, which is unacceptable for the ingest path.
@@ -423,7 +418,31 @@ Preset [slow]:
 Decomb? Source is 1080i. [y/N]: y
 ```
 
-- **Audio codec is always copy.** For MKV output, `--audio-fallback` is meaningless (MKV holds any codec). Track selection is the entire decision — "audio tracks: 1,3" copies tracks 1 and 3 bit-perfect into the output. The escape hatch (transcode to AC3 with bitrate prompt) stays available via `rne edit` for the rare case of a Blu-ray that ships only TrueHD/DTS with no AC3.
+After the audio-track *selection* prompt, the CLI inspects each chosen track's codec and channels (from the probe data already in hand). For each selected track:
+
+- **If codec is in `COPY_FRIENDLY_AUDIO_CODECS`**: silently mark as `{"track": N, "codec": "copy"}`. No prompt.
+- **If codec is not copy-friendly**: prompt for the transcode decision.
+
+Per-track transcode prompt:
+
+```
+Track 1 is TrueHD 5.1. Transcode? [Y/n/c]
+  Y - transcode to AC3 5.1 @ 640k (recommended)
+  n - copy as-is (lossless, large file)
+  c - custom codec/bitrate
+```
+
+Where the recommended bitrate comes from `AC3_BITRATE_BY_CHANNELS[track.channels]`. Default is `Y` (transcode to AC3) — universally playable on Jellyfin clients, much smaller file. `n` keeps the lossless track. `c` opens two follow-up prompts for codec name and bitrate, no validation beyond "bitrate must be a positive integer".
+
+Examples:
+- DVD with one AC3 track selected: zero prompts (codec is copy-friendly).
+- Blu-ray with AC3 2.0 + AC3 5.1 selected: zero prompts (both copy-friendly).
+- Blu-ray with TrueHD 5.1 + AC3 2.0 selected: one prompt (track 1 is TrueHD), default Y produces `[{"track": 1, "codec": "ac3", "bitrate": 640}, {"track": 2, "codec": "copy"}]`.
+- Blu-ray with TrueHD 2.0 + DTS 5.1 selected: two prompts, one per non-friendly track.
+
+Other notes:
+- **Audio codec is always copy when possible.** Selection alone is the decision for copy-friendly tracks.
+- **For MKV output, `--audio-fallback` is meaningless.** MKV holds any codec. Track-level codec is the real decision.
 - **Decomb prompt only appears for interlaced sources.** For progressive Blu-ray it's skipped entirely. For DVDs it'll usually show up.
 - All defaults come from `config.py`. Tune once, forget.
 
@@ -433,13 +452,15 @@ Build the full plan and print it:
 
 ```
 Preview:
-  S01E05  Initial D - S01E05.mkv  (a=[1] s=[] crf=20 preset=slow)
-  S01E06  Initial D - S01E06.mkv  (a=[1] s=[] crf=20 preset=slow)
-  S01E07  Initial D - S01E07.mkv  (a=[1] s=[] crf=20 preset=slow)
-  S01E08  Initial D - S01E08.mkv  (a=[1] s=[] crf=20 preset=slow)
+  S01E05  Initial D - S01E05.mkv  (a=[1:ac3@640,2:copy] s=[] crf=20 preset=slow)
+  S01E06  Initial D - S01E06.mkv  (a=[1:ac3@640,2:copy] s=[] crf=20 preset=slow)
+  S01E07  Initial D - S01E07.mkv  (a=[1:ac3@640,2:copy] s=[] crf=20 preset=slow)
+  S01E08  Initial D - S01E08.mkv  (a=[1:ac3@640,2:copy] s=[] crf=20 preset=slow)
 
 Queue these 4 jobs? [Y/n/edit]
 ```
+
+The audio summary format `[1:ac3@640,2:copy]` shows track index, action, and bitrate (when transcoding) so the user can verify at a glance.
 
 `edit` opens a tempfile of the queue plan as JSON in `$EDITOR`; on save, validate and re-show the preview. Most ingests are `Y` and done. The `edit` escape hatch catches per-file deviations (different runtime, double-length episode, etc.) without per-file prompts.
 
@@ -719,3 +740,4 @@ systemctl --user enable --now rne-dashboard.service
 - How reliable is ffprobe stream duration as a forced-vs-full subtitle signal across the user's Blu-ray collection? If unreliable, fall back to `mkvmerge --identify --identification-format json` from `mkvtoolnix-cli`. Worth keeping in pocket.
 - Is the 30-second dashboard meta-refresh too slow (hard to notice progress) or too fast (pointless reloads when nothing changes)? Easy to tune.
 - Default `priority` is 0 for everything. If priority becomes useful (e.g. boost a particular show ahead of the queue), `rne priority <id> <n>` is a trivial add.
+- `COPY_FRIENDLY_AUDIO_CODECS` and `AC3_BITRATE_BY_CHANNELS` are tunable — adjust if real-world testing shows DTS plays fine on your client devices, or if a different default bitrate is preferred for surround sources.

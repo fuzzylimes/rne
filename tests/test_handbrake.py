@@ -2,7 +2,7 @@ import pytest
 
 from rne import config
 from rne.handbrake import build_command
-from rne.models import HandbrakeArgs
+from rne.models import AudioTrack, HandbrakeArgs
 
 SRC = "/staging/title_t00.mkv"
 OUT = "/staging/Movie.mkv"
@@ -53,7 +53,8 @@ def test_defaults():
     assert _flag_value(result, "--quality") == "20"
     assert _flag_value(result, "--encoder-preset") == "slow"
     assert _flag_value(result, "-a") == "1"
-    assert _flag_value(result, "--aencoder") == "copy"
+    assert _flag_value(result, "-E") == "copy"
+    assert _flag_value(result, "-B") == "auto"
     assert not _has_flag(result, "-s")
     assert _has_flag(result, "--markers")
     assert _has_flag(result, "--align-av")
@@ -61,27 +62,44 @@ def test_defaults():
 
 
 # ---------------------------------------------------------------------------
-# Audio tracks
+# Audio tracks — parallel -a / -E / -B lists
 # ---------------------------------------------------------------------------
 
-def test_multiple_audio_tracks():
-    result = cmd(audio_tracks=[1, 2, 3])
+def test_single_copy_track():
+    result = cmd(audio_tracks=[AudioTrack(track=1, codec="copy")])
+    assert _flag_value(result, "-a") == "1"
+    assert _flag_value(result, "-E") == "copy"
+    assert _flag_value(result, "-B") == "auto"
+
+
+def test_single_transcode_track():
+    result = cmd(audio_tracks=[AudioTrack(track=1, codec="ac3", bitrate=640)])
+    assert _flag_value(result, "-a") == "1"
+    assert _flag_value(result, "-E") == "ac3"
+    assert _flag_value(result, "-B") == "640"
+
+
+def test_mixed_copy_and_transcode():
+    tracks = [
+        AudioTrack(track=1, codec="ac3", bitrate=640),
+        AudioTrack(track=2, codec="copy"),
+    ]
+    result = cmd(audio_tracks=tracks)
+    assert _flag_value(result, "-a") == "1,2"
+    assert _flag_value(result, "-E") == "ac3,copy"
+    assert _flag_value(result, "-B") == "640,auto"
+
+
+def test_multiple_transcode_tracks():
+    tracks = [
+        AudioTrack(track=1, codec="ac3", bitrate=640),
+        AudioTrack(track=2, codec="aac", bitrate=192),
+        AudioTrack(track=3, codec="ac3", bitrate=96),
+    ]
+    result = cmd(audio_tracks=tracks)
     assert _flag_value(result, "-a") == "1,2,3"
-
-
-def test_multiple_audio_tracks_aencoder_matches_count():
-    result = cmd(audio_tracks=[1, 2], audio_codec="copy")
-    assert _flag_value(result, "--aencoder") == "copy,copy"
-
-
-def test_audio_codec_copy():
-    result = cmd(audio_tracks=[1, 2], audio_codec="copy")
-    assert _flag_value(result, "--aencoder") == "copy,copy"
-
-
-def test_audio_codec_ac3():
-    result = cmd(audio_tracks=[1, 2], audio_codec="ac3")
-    assert _flag_value(result, "--aencoder") == "ac3,ac3"
+    assert _flag_value(result, "-E") == "ac3,aac,ac3"
+    assert _flag_value(result, "-B") == "640,192,96"
 
 
 # ---------------------------------------------------------------------------
@@ -124,7 +142,7 @@ def test_extra_args_appended():
 
 def test_extra_args_empty():
     result = cmd(extra_args=[])
-    assert result[-1] in ("--align-av", "--decomb")  # no junk appended
+    assert result[-1] in ("--align-av", "--decomb")
 
 
 # ---------------------------------------------------------------------------

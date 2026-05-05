@@ -83,6 +83,14 @@ def test_audio_first_codec(summary):
     assert summary.audio[0].codec == "truehd"
 
 
+def test_audio_first_channels(summary):
+    assert summary.audio[0].channels == 6
+
+
+def test_audio_ac3_channels(summary):
+    assert summary.audio[1].channels == 6
+
+
 def test_audio_first_lang(summary):
     assert summary.audio[0].lang == "jpn"
 
@@ -199,3 +207,21 @@ def test_audio_bitrate_none_when_no_fallback():
     }
     s = summarize(data)
     assert s.audio[0].bitrate is None
+
+
+def test_audio_channels_none_when_absent():
+    data = {
+        "streams": [
+            {
+                "codec_type": "audio",
+                "codec_name": "ac3",
+                "disposition": {},
+                "tags": {},
+                "bit_rate": "448000",
+                # no "channels" key
+            }
+        ],
+        "format": {},
+    }
+    s = summarize(data)
+    assert s.audio[0].channels is None

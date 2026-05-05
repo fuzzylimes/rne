@@ -19,6 +19,7 @@ class VideoStream:
 @dataclass
 class AudioStream:
     codec: str
+    channels: int | None  # channel count from stream.channels; None when absent
     lang: str
     title: str
     default: bool
@@ -112,8 +113,10 @@ def summarize(probe_data: dict) -> StreamSummary:
                 bitrate = fmt_br // num_audio
             else:
                 bitrate = None
+            raw_ch = s.get("channels")
             audio_streams.append(AudioStream(
                 codec=s.get("codec_name", ""),
+                channels=int(raw_ch) if raw_ch is not None else None,
                 lang=tags.get("language", ""),
                 title=tags.get("title", ""),
                 default=_yn(disp, "default"),

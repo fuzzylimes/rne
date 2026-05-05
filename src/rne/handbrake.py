@@ -25,14 +25,23 @@ def build_command(
     if args.encoder not in _KNOWN_ENCODERS:
         raise ValueError(f"unknown encoder: {args.encoder!r}")
 
+    tracks_a: list[str] = []
+    tracks_e: list[str] = []
+    tracks_b: list[str] = []
+    for t in args.audio_tracks:
+        tracks_a.append(str(t.track))
+        tracks_e.append(t.codec)
+        tracks_b.append("auto" if t.codec == "copy" else str(t.bitrate))
+
     cmd = list(config.HANDBRAKE_PREFIX) + [
         "-i", source_path,
         "-o", output_path,
         "--encoder", args.encoder,
         "--quality", str(args.quality),
         "--encoder-preset", args.preset,
-        "-a", ",".join(str(t) for t in args.audio_tracks),
-        "--aencoder", ",".join([args.audio_codec] * len(args.audio_tracks)),
+        "-a", ",".join(tracks_a),
+        "-E", ",".join(tracks_e),
+        "-B", ",".join(tracks_b),
     ]
 
     if args.subtitle_tracks:

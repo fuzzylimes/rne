@@ -214,12 +214,12 @@ def test_handbrake_args_roundtrip_defaults(conn):
 
 
 def test_handbrake_args_roundtrip_custom_values(conn):
+    from rne.models import AudioTrack
     original = HandbrakeArgs(
         encoder="x264",
         quality=22,
         preset="medium",
-        audio_tracks=[1, 3],
-        audio_codec="copy",
+        audio_tracks=[AudioTrack(track=1, codec="copy"), AudioTrack(track=3, codec="ac3", bitrate=640)],
         subtitle_tracks=[2],
         decomb=True,
         extra_args=["--no-dvdnav"],

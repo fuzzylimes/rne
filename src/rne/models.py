@@ -18,24 +18,47 @@ class JobStatus(StrEnum):
 
 
 @dataclass
+class AudioTrack:
+    track: int
+    codec: str = "copy"
+    bitrate: int | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.track, int) or self.track < 1:
+            raise ValueError(f"track must be a positive int, got {self.track!r}")
+        if self.codec == "copy":
+            if self.bitrate is not None:
+                raise ValueError("bitrate must be None when codec is 'copy'")
+        else:
+            if self.bitrate is None or self.bitrate <= 0:
+                raise ValueError(
+                    f"bitrate must be a positive int when codec is {self.codec!r}, got {self.bitrate!r}"
+                )
+
+
+@dataclass
 class HandbrakeArgs:
     encoder: str = "x265"
     quality: int = 20
     preset: str = "slow"
-    audio_tracks: list[int] = field(default_factory=lambda: [1])
-    audio_codec: str = "copy"
+    audio_tracks: list[AudioTrack] = field(default_factory=lambda: [AudioTrack(track=1)])
     subtitle_tracks: list[int] = field(default_factory=list)
     decomb: bool = False
     extra_args: list[str] = field(default_factory=list)
 
     def to_json(self) -> str:
+        def _track_dict(t: AudioTrack) -> dict:
+            d: dict = {"track": t.track, "codec": t.codec}
+            if t.bitrate is not None:
+                d["bitrate"] = t.bitrate
+            return d
+
         return json.dumps(
             {
                 "encoder": self.encoder,
                 "quality": self.quality,
                 "preset": self.preset,
-                "audio_tracks": self.audio_tracks,
-                "audio_codec": self.audio_codec,
+                "audio_tracks": [_track_dict(t) for t in self.audio_tracks],
                 "subtitle_tracks": self.subtitle_tracks,
                 "decomb": self.decomb,
                 "extra_args": self.extra_args,
@@ -44,7 +67,14 @@ class HandbrakeArgs:
 
     @classmethod
     def from_json(cls, s: str) -> HandbrakeArgs:
-        return cls(**json.loads(s))
+        data = json.loads(s)
+        raw_tracks = data.get("audio_tracks", [])
+        if raw_tracks and not isinstance(raw_tracks[0], dict):
+            raise ValueError(
+                "audio_tracks must be a list of track objects, not a list of ints"
+            )
+        data["audio_tracks"] = [AudioTrack(**t) for t in raw_tracks]
+        return cls(**data)
 
 
 @dataclass
