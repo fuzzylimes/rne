@@ -1,0 +1,26 @@
+{
+  "name": "rne",
+  "image": "mcr.microsoft.com/devcontainers/python:3.14",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {}
+  },
+  "onCreateCommand": "curl -LsSf https://astral.sh/uv/install.sh | sh && npm install -g @anthropic-ai/claude-code && sudo chown -R vscode:vscode /home/vscode/.claude",
+  "postCreateCommand": "uv sync",
+  "mounts": [
+    "source=claude-code-config-shared,target=/home/vscode/.claude,type=volume"
+  ],
+  "remoteEnv": {
+    "PATH": "${containerEnv:PATH}:/home/vscode/.local/bin",
+    "VIRTUAL_ENV": "" // Avoid venv errors when running in devcontainer
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "anthropic.claude-code",
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "charliermarsh.ruff"
+      ]
+    }
+  }
+}
