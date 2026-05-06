@@ -75,7 +75,9 @@ def run_job(job: "Job", conn: "sqlite3.Connection") -> None:
     last_update = 0.0
     stderr_buf: collections.deque[str] = collections.deque(maxlen=200)
 
-    t = threading.Thread(target=_drain_to_deque, args=(proc.stderr, stderr_buf), daemon=True)
+    t = threading.Thread(
+        target=_drain_to_deque, args=(proc.stderr, stderr_buf), daemon=True
+    )
     t.start()
 
     for line in proc.stdout:

@@ -27,6 +27,7 @@ def parsed():
 # parse_info — disc_info
 # ---------------------------------------------------------------------------
 
+
 def test_disc_volume_name(parsed):
     disc_info, _ = parsed
     assert disc_info[C_VOLUME_NAME] == "Example Movie Title"
@@ -40,6 +41,7 @@ def test_disc_info_has_entries(parsed):
 # ---------------------------------------------------------------------------
 # parse_info — titles
 # ---------------------------------------------------------------------------
+
 
 def test_title_count(parsed):
     _, titles = parsed
@@ -77,6 +79,7 @@ def test_title_has_video_and_audio_streams(parsed):
 # ---------------------------------------------------------------------------
 # summarize
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(scope="module")
 def title0_summary(parsed):
@@ -137,6 +140,7 @@ def test_summary_empty_title():
 # ---------------------------------------------------------------------------
 # parse_index_spec
 # ---------------------------------------------------------------------------
+
 
 def test_all_returns_none():
     assert parse_index_spec("all") is None

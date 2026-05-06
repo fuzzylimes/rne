@@ -94,6 +94,7 @@ def init_db(conn: sqlite3.Connection) -> None:
 # Worker queries
 # ---------------------------------------------------------------------------
 
+
 def claim_next_job(conn: sqlite3.Connection) -> "Job | None":
     from rne.models import Job
 

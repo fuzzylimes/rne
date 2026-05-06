@@ -24,6 +24,7 @@ def summary(probe_data) -> StreamSummary:
 # Overall shape
 # ---------------------------------------------------------------------------
 
+
 def test_returns_stream_summary(summary):
     assert isinstance(summary, StreamSummary)
 
@@ -43,6 +44,7 @@ def test_subtitle_count(summary):
 # ---------------------------------------------------------------------------
 # Video stream
 # ---------------------------------------------------------------------------
+
 
 def test_video_codec(summary):
     assert summary.video[0].codec == "mpeg2video"
@@ -77,6 +79,7 @@ def test_video_forced_false(summary):
 # ---------------------------------------------------------------------------
 # Audio streams — ordering and basic fields
 # ---------------------------------------------------------------------------
+
 
 def test_audio_first_codec(summary):
     # First audio in the file is TrueHD (jpn, default track)
@@ -129,6 +132,7 @@ def test_audio_languages_cover_expected(summary):
 # Subtitle streams
 # ---------------------------------------------------------------------------
 
+
 def test_subtitle_first_codec(summary):
     assert summary.subtitle[0].codec == "hdmv_pgs_subtitle"
 
@@ -164,6 +168,7 @@ def test_subtitle_languages(summary):
 # summarize with no-duration subtitles
 # ---------------------------------------------------------------------------
 
+
 def test_subtitle_duration_none_when_absent():
     data = {
         "streams": [
@@ -184,6 +189,7 @@ def test_subtitle_duration_none_when_absent():
 # ---------------------------------------------------------------------------
 # summarize with empty input
 # ---------------------------------------------------------------------------
+
 
 def test_empty_probe_data():
     s = summarize({"streams": [], "format": {}})

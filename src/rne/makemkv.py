@@ -75,11 +75,16 @@ def summarize(tid: int, title: dict) -> dict:
         fps = fps.split("(")[0].strip()
 
     if audio:
-        audio_str = " ".join(filter(None, [
-            audio.get(S_CODEC, ""),
-            audio.get(S_NAME, ""),
-            f"[{audio.get(S_LANG_CODE, '')}]" if audio.get(S_LANG_CODE) else "",
-        ]))
+        audio_str = " ".join(
+            filter(
+                None,
+                [
+                    audio.get(S_CODEC, ""),
+                    audio.get(S_NAME, ""),
+                    f"[{audio.get(S_LANG_CODE, '')}]" if audio.get(S_LANG_CODE) else "",
+                ],
+            )
+        )
     else:
         audio_str = ""
 
@@ -136,8 +141,14 @@ def run_rips(disc: int, minlength: int, outdir: str, indexes: list[int]) -> list
     """
     failed: list[int] = []
     for i in indexes:
-        cmd = ["makemkvcon", f"--minlength={minlength}", "mkv",
-               f"disc:{disc}", str(i), outdir]
+        cmd = [
+            "makemkvcon",
+            f"--minlength={minlength}",
+            "mkv",
+            f"disc:{disc}",
+            str(i),
+            outdir,
+        ]
         print(f"\n$ {' '.join(cmd)}")
         if subprocess.run(cmd).returncode != 0:
             print(f"!! Title {i} failed", file=sys.stderr)

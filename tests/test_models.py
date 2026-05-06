@@ -7,6 +7,7 @@ from rne.models import AudioTrack, HandbrakeArgs
 # AudioTrack validation
 # ---------------------------------------------------------------------------
 
+
 def test_audio_track_copy_valid():
     t = AudioTrack(track=1, codec="copy")
     assert t.track == 1
@@ -47,6 +48,7 @@ def test_audio_track_negative_index_raises():
 # ---------------------------------------------------------------------------
 # HandbrakeArgs round-trip
 # ---------------------------------------------------------------------------
+
 
 def test_round_trip_copy_only():
     args = HandbrakeArgs(audio_tracks=[AudioTrack(track=1, codec="copy")])

@@ -19,8 +19,7 @@ def run(args) -> None:
 
     if row["status"] == JobStatus.RUNNING:
         print(
-            f"Job {args.id} is currently running. "
-            "Stop the worker before editing.",
+            f"Job {args.id} is currently running. Stop the worker before editing.",
             file=sys.stderr,
         )
         sys.exit(1)

@@ -16,6 +16,7 @@ from rne.models import AudioTrack, HandbrakeArgs
 # Table display
 # ---------------------------------------------------------------------------
 
+
 def _print_table(cols: list[str], rows: list[dict]) -> None:
     widths = {
         c: max(len(c), max((len(str(r.get(c, ""))) for r in rows), default=0))
@@ -93,6 +94,7 @@ def _print_stream_tables(summary: probe.StreamSummary) -> None:
 # Preview (pure — tested directly)
 # ---------------------------------------------------------------------------
 
+
 def _audio_summary(audio_tracks: list[AudioTrack]) -> str:
     parts = []
     for t in audio_tracks:
@@ -125,6 +127,7 @@ def build_preview(jobs_plan: list[dict]) -> str:
 # ---------------------------------------------------------------------------
 # Job plan construction
 # ---------------------------------------------------------------------------
+
 
 def _build_jobs_plan(
     *,
@@ -174,6 +177,7 @@ def _build_jobs_plan(
 # ---------------------------------------------------------------------------
 # Plan serialisation for $EDITOR round-trip
 # ---------------------------------------------------------------------------
+
 
 def _plan_to_json(jobs_plan: list[dict]) -> str:
     serialisable = []
@@ -231,6 +235,7 @@ def _edit_plan(jobs_plan: list[dict]) -> list[dict]:
 # DB insertion
 # ---------------------------------------------------------------------------
 
+
 def _create_ingest_batch(
     conn,
     *,
@@ -283,6 +288,7 @@ def _insert_jobs(conn, batch_id: int, jobs_plan: list[dict]) -> None:
 # ---------------------------------------------------------------------------
 # Main ingest flow
 # ---------------------------------------------------------------------------
+
 
 def run() -> None:
     # ---- Step 1: disc detection ------------------------------------------------
@@ -448,10 +454,9 @@ def run() -> None:
         if second_source.exists():
             try:
                 probe2 = probe.summarize(probe.probe(str(second_source)))
-                if (
-                    len(probe2.audio) != len(stream_summary.audio)
-                    or len(probe2.subtitle) != len(stream_summary.subtitle)
-                ):
+                if len(probe2.audio) != len(stream_summary.audio) or len(
+                    probe2.subtitle
+                ) != len(stream_summary.subtitle):
                     print(
                         "\nWarning: subsequent titles differ in track layout.",
                         file=sys.stderr,
@@ -534,7 +539,11 @@ def run() -> None:
     )
     decomb = False
     if interlaced:
-        field_label = stream_summary.video[0].field_order if stream_summary.video else "interlaced"
+        field_label = (
+            stream_summary.video[0].field_order
+            if stream_summary.video
+            else "interlaced"
+        )
         decomb = prompts.prompt_yes_no(
             f"Decomb? Source is {field_label}.", default=False
         )
@@ -564,9 +573,7 @@ def run() -> None:
     while True:
         n = len(jobs_plan)
         preview = build_preview(jobs_plan)
-        decision = prompts.confirm_or_edit(
-            preview + f"\n\nQueue these {n} job(s)?"
-        )
+        decision = prompts.confirm_or_edit(preview + f"\n\nQueue these {n} job(s)?")
         if decision == "yes":
             break
         if decision == "no":

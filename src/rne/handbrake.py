@@ -3,14 +3,21 @@ from __future__ import annotations
 from rne import config
 from rne.models import HandbrakeArgs
 
-_KNOWN_ENCODERS = frozenset({
-    "x264", "x264_10b",
-    "x265", "x265_10b", "x265_12b",
-    "mpeg4", "mpeg2",
-    "VP8", "VP9",
-    "theora",
-    "av1",
-})
+_KNOWN_ENCODERS = frozenset(
+    {
+        "x264",
+        "x264_10b",
+        "x265",
+        "x265_10b",
+        "x265_12b",
+        "mpeg4",
+        "mpeg2",
+        "VP8",
+        "VP9",
+        "theora",
+        "av1",
+    }
+)
 
 
 def build_command(
@@ -34,14 +41,22 @@ def build_command(
         tracks_b.append("auto" if t.codec == "copy" else str(t.bitrate))
 
     cmd = list(config.HANDBRAKE_PREFIX) + [
-        "-i", source_path,
-        "-o", output_path,
-        "--encoder", args.encoder,
-        "--quality", str(args.quality),
-        "--encoder-preset", args.preset,
-        "-a", ",".join(tracks_a),
-        "-E", ",".join(tracks_e),
-        "-B", ",".join(tracks_b),
+        "-i",
+        source_path,
+        "-o",
+        output_path,
+        "--encoder",
+        args.encoder,
+        "--quality",
+        str(args.quality),
+        "--encoder-preset",
+        args.preset,
+        "-a",
+        ",".join(tracks_a),
+        "-E",
+        ",".join(tracks_e),
+        "-B",
+        ",".join(tracks_b),
     ]
 
     if args.subtitle_tracks:

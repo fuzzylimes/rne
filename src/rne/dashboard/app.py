@@ -19,6 +19,7 @@ def create_app() -> Flask:
             conn.close()
 
     from rne.dashboard import routes
+
     routes.register(app)
 
     return app

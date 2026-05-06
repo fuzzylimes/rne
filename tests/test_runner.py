@@ -16,6 +16,7 @@ FIXTURES = pathlib.Path(__file__).parent / "fixtures"
 # parse_handbrake_progress
 # ---------------------------------------------------------------------------
 
+
 def test_parse_typical_line():
     line = "Encoding: task 1 of 1, 12.34 % (45.6 fps, avg 50.0 fps, ETA 00h05m12s)"
     result = parse_handbrake_progress(line)
@@ -67,6 +68,7 @@ def test_parse_eta_only_hours():
 # run_job fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def mem_conn():
     c = sqlite3.connect(":memory:")
@@ -94,6 +96,7 @@ def _insert_job(conn, source_path: str, output_path: str) -> Job:
 # ---------------------------------------------------------------------------
 # run_job — success path
 # ---------------------------------------------------------------------------
+
 
 def test_run_job_success(mem_conn, tmp_path):
     encoder = str(FIXTURES / "fake_encoder_ok.sh")
@@ -133,8 +136,10 @@ def test_run_job_success_records_progress(mem_conn, tmp_path):
     job.handbrake_args = HandbrakeArgs(audio_tracks=[AudioTrack(track=1, codec="copy")])
 
     # Reduce the throttle so all three lines in the fake script get written.
-    with patch("rne.config.HANDBRAKE_PREFIX", [encoder]), \
-         patch("rne.worker.runner.time") as mock_time:
+    with (
+        patch("rne.config.HANDBRAKE_PREFIX", [encoder]),
+        patch("rne.worker.runner.time") as mock_time,
+    ):
         # monotonic always returns a value far enough apart to bypass throttle.
         mock_time.monotonic.side_effect = [0.0, 999.0, 1999.0, 2999.0, 3999.0]
         run_job(job, mem_conn)
@@ -148,6 +153,7 @@ def test_run_job_success_records_progress(mem_conn, tmp_path):
 # ---------------------------------------------------------------------------
 # run_job — failure path
 # ---------------------------------------------------------------------------
+
 
 def test_run_job_failure(mem_conn, tmp_path):
     encoder = str(FIXTURES / "fake_encoder_fail.sh")

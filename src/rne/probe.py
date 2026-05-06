@@ -47,9 +47,13 @@ class StreamSummary:
 def probe(mkv_path: str) -> dict:
     """Run ffprobe on mkv_path and return parsed JSON."""
     cmd = [
-        "ffprobe", "-v", "quiet",
-        "-print_format", "json",
-        "-show_streams", "-show_format",
+        "ffprobe",
+        "-v",
+        "quiet",
+        "-print_format",
+        "json",
+        "-show_streams",
+        "-show_format",
         mkv_path,
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, check=True)
@@ -95,15 +99,17 @@ def summarize(probe_data: dict) -> StreamSummary:
         if codec_type == "video":
             w, h = s.get("width", ""), s.get("height", "")
             res = f"{w}x{h}" if w and h else ""
-            video_streams.append(VideoStream(
-                codec=s.get("codec_name", ""),
-                resolution=res,
-                fps=_fr(s.get("r_frame_rate", "")),
-                field_order=s.get("field_order", ""),
-                lang=tags.get("language", ""),
-                default=_yn(disp, "default"),
-                forced=_yn(disp, "forced"),
-            ))
+            video_streams.append(
+                VideoStream(
+                    codec=s.get("codec_name", ""),
+                    resolution=res,
+                    fps=_fr(s.get("r_frame_rate", "")),
+                    field_order=s.get("field_order", ""),
+                    lang=tags.get("language", ""),
+                    default=_yn(disp, "default"),
+                    forced=_yn(disp, "forced"),
+                )
+            )
 
         elif codec_type == "audio":
             raw_br = s.get("bit_rate")
@@ -114,25 +120,31 @@ def summarize(probe_data: dict) -> StreamSummary:
             else:
                 bitrate = None
             raw_ch = s.get("channels")
-            audio_streams.append(AudioStream(
-                codec=s.get("codec_name", ""),
-                channels=int(raw_ch) if raw_ch is not None else None,
-                lang=tags.get("language", ""),
-                title=tags.get("title", ""),
-                default=_yn(disp, "default"),
-                forced=_yn(disp, "forced"),
-                bitrate=bitrate,
-            ))
+            audio_streams.append(
+                AudioStream(
+                    codec=s.get("codec_name", ""),
+                    channels=int(raw_ch) if raw_ch is not None else None,
+                    lang=tags.get("language", ""),
+                    title=tags.get("title", ""),
+                    default=_yn(disp, "default"),
+                    forced=_yn(disp, "forced"),
+                    bitrate=bitrate,
+                )
+            )
 
         elif codec_type == "subtitle":
             dur = s.get("duration")
-            subtitle_streams.append(SubtitleStream(
-                codec=s.get("codec_name", ""),
-                lang=tags.get("language", ""),
-                title=tags.get("title", ""),
-                default=_yn(disp, "default"),
-                forced=_yn(disp, "forced"),
-                duration=float(dur) if dur else None,
-            ))
+            subtitle_streams.append(
+                SubtitleStream(
+                    codec=s.get("codec_name", ""),
+                    lang=tags.get("language", ""),
+                    title=tags.get("title", ""),
+                    default=_yn(disp, "default"),
+                    forced=_yn(disp, "forced"),
+                    duration=float(dur) if dur else None,
+                )
+            )
 
-    return StreamSummary(video=video_streams, audio=audio_streams, subtitle=subtitle_streams)
+    return StreamSummary(
+        video=video_streams, audio=audio_streams, subtitle=subtitle_streams
+    )

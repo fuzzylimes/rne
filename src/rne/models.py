@@ -41,7 +41,9 @@ class HandbrakeArgs:
     encoder: str = "x265"
     quality: int = 20
     preset: str = "slow"
-    audio_tracks: list[AudioTrack] = field(default_factory=lambda: [AudioTrack(track=1)])
+    audio_tracks: list[AudioTrack] = field(
+        default_factory=lambda: [AudioTrack(track=1)]
+    )
     subtitle_tracks: list[int] = field(default_factory=list)
     decomb: bool = False
     extra_args: list[str] = field(default_factory=list)

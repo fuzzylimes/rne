@@ -28,7 +28,9 @@ def prompt_index_spec(question: str, valid_indexes: list[int]) -> list[int] | No
             return list(valid_indexes)
         invalid = [i for i in result if i not in valid_indexes]
         if invalid:
-            print(f"Invalid indexes: {invalid}. Valid: {valid_indexes}", file=sys.stderr)
+            print(
+                f"Invalid indexes: {invalid}. Valid: {valid_indexes}", file=sys.stderr
+            )
             continue
         return result
 

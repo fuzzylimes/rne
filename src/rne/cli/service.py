@@ -32,9 +32,7 @@ def install() -> None:
     pkg = importlib.resources.files("rne.systemd")
     for unit_name in _UNITS:
         content = pkg.joinpath(unit_name).read_text()
-        content = content.replace(
-            "__RNE_WORKER_BIN__", worker_bin
-        ).replace(
+        content = content.replace("__RNE_WORKER_BIN__", worker_bin).replace(
             "__RNE_DASHBOARD_BIN__", dashboard_bin
         )
         target = unit_dir / unit_name
@@ -56,7 +54,9 @@ def uninstall() -> None:
         check=False,
     )
     if result is not None and result.returncode != 0:
-        print(f"systemctl disable returned {result.returncode} (units may not have been loaded)")
+        print(
+            f"systemctl disable returned {result.returncode} (units may not have been loaded)"
+        )
 
     unit_dir = _unit_dir()
     removed = []

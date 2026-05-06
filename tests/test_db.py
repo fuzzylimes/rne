@@ -7,12 +7,11 @@ from tests.conftest import insert_job
 # Schema init
 # ---------------------------------------------------------------------------
 
+
 def test_init_db_creates_tables(conn):
     tables = {
         row[0]
-        for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        )
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
     }
     assert {"jobs", "ingest_batches", "worker_status", "queue_settings"} <= tables
 
@@ -20,9 +19,7 @@ def test_init_db_creates_tables(conn):
 def test_init_db_creates_indexes(conn):
     indexes = {
         row[0]
-        for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='index'"
-        )
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")
     }
     assert {"idx_jobs_status", "idx_jobs_claim", "idx_jobs_batch"} <= indexes
 
@@ -51,6 +48,7 @@ def test_init_db_seeds_queue_settings(conn):
 # ---------------------------------------------------------------------------
 # claim_next_job
 # ---------------------------------------------------------------------------
+
 
 def test_claim_next_job_empty_returns_none(conn):
     assert db.claim_next_job(conn) is None
@@ -116,23 +114,33 @@ def test_claim_next_job_skips_running(conn):
 
 def test_claim_next_job_skips_terminal_states(conn):
     for status in ("done", "failed", "cancelled", "interrupted"):
-        insert_job(conn, status=status, source_path=f"/s/{status}.mkv",
-                   output_path=f"/o/{status}.mkv")
+        insert_job(
+            conn,
+            status=status,
+            source_path=f"/s/{status}.mkv",
+            output_path=f"/o/{status}.mkv",
+        )
     assert db.claim_next_job(conn) is None
 
 
 def test_claim_next_job_priority_order(conn):
     # Lower priority value runs first.
     insert_job(conn, priority=10, source_path="/s/low.mkv", output_path="/o/low.mkv")
-    id_high = insert_job(conn, priority=0, source_path="/s/high.mkv", output_path="/o/high.mkv")
+    id_high = insert_job(
+        conn, priority=0, source_path="/s/high.mkv", output_path="/o/high.mkv"
+    )
     job = db.claim_next_job(conn)
     assert job.id == id_high
 
 
 def test_claim_next_job_id_order_on_priority_tie(conn):
     # Same priority → lower id (insertion order) wins.
-    id_first = insert_job(conn, priority=0, source_path="/s/first.mkv", output_path="/o/first.mkv")
-    insert_job(conn, priority=0, source_path="/s/second.mkv", output_path="/o/second.mkv")
+    id_first = insert_job(
+        conn, priority=0, source_path="/s/first.mkv", output_path="/o/first.mkv"
+    )
+    insert_job(
+        conn, priority=0, source_path="/s/second.mkv", output_path="/o/second.mkv"
+    )
     job = db.claim_next_job(conn)
     assert job.id == id_first
 
@@ -141,8 +149,12 @@ def test_claim_next_job_only_claims_one(conn):
     insert_job(conn, source_path="/s/a.mkv", output_path="/o/a.mkv")
     insert_job(conn, source_path="/s/b.mkv", output_path="/o/b.mkv")
     db.claim_next_job(conn)
-    queued = conn.execute("SELECT COUNT(*) FROM jobs WHERE status='queued'").fetchone()[0]
-    running = conn.execute("SELECT COUNT(*) FROM jobs WHERE status='running'").fetchone()[0]
+    queued = conn.execute("SELECT COUNT(*) FROM jobs WHERE status='queued'").fetchone()[
+        0
+    ]
+    running = conn.execute(
+        "SELECT COUNT(*) FROM jobs WHERE status='running'"
+    ).fetchone()[0]
     assert queued == 1
     assert running == 1
 
@@ -161,11 +173,14 @@ def test_claim_next_job_second_call_claims_next(conn):
 # reconcile_orphans
 # ---------------------------------------------------------------------------
 
+
 def test_reconcile_orphans_flips_running_to_interrupted(conn):
     job_id = insert_job(conn, status="running")
     count = db.reconcile_orphans(conn)
     assert count == 1
-    row = conn.execute("SELECT status, error_message FROM jobs WHERE id=?", (job_id,)).fetchone()
+    row = conn.execute(
+        "SELECT status, error_message FROM jobs WHERE id=?", (job_id,)
+    ).fetchone()
     assert row["status"] == "interrupted"
     assert row["error_message"] is not None
 
@@ -179,8 +194,12 @@ def test_reconcile_orphans_sets_finished_at(conn):
 
 def test_reconcile_orphans_leaves_other_statuses_untouched(conn):
     for status in ("queued", "paused", "done", "failed", "cancelled", "interrupted"):
-        insert_job(conn, status=status, source_path=f"/s/{status}.mkv",
-                   output_path=f"/o/{status}.mkv")
+        insert_job(
+            conn,
+            status=status,
+            source_path=f"/s/{status}.mkv",
+            output_path=f"/o/{status}.mkv",
+        )
     db.reconcile_orphans(conn)
     for status in ("queued", "paused", "done", "failed", "cancelled", "interrupted"):
         row = conn.execute(
@@ -207,6 +226,7 @@ def test_reconcile_orphans_handles_multiple_running(conn):
 # HandbrakeArgs round-trip
 # ---------------------------------------------------------------------------
 
+
 def test_handbrake_args_roundtrip_defaults(conn):
     original = HandbrakeArgs()
     restored = HandbrakeArgs.from_json(original.to_json())
@@ -215,11 +235,15 @@ def test_handbrake_args_roundtrip_defaults(conn):
 
 def test_handbrake_args_roundtrip_custom_values(conn):
     from rne.models import AudioTrack
+
     original = HandbrakeArgs(
         encoder="x264",
         quality=22,
         preset="medium",
-        audio_tracks=[AudioTrack(track=1, codec="copy"), AudioTrack(track=3, codec="ac3", bitrate=640)],
+        audio_tracks=[
+            AudioTrack(track=1, codec="copy"),
+            AudioTrack(track=3, codec="ac3", bitrate=640),
+        ],
         subtitle_tracks=[2],
         decomb=True,
         extra_args=["--no-dvdnav"],

@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
-from unittest.mock import patch, call
 
 import pytest
 
@@ -59,13 +57,17 @@ def test_install_calls_daemon_reload(tmp_path, monkeypatch):
 
 
 def test_install_exits_when_worker_missing(monkeypatch):
-    monkeypatch.setattr("shutil.which", lambda name: None if name == "rne-worker" else FAKE_DASHBOARD)
+    monkeypatch.setattr(
+        "shutil.which", lambda name: None if name == "rne-worker" else FAKE_DASHBOARD
+    )
     with pytest.raises(SystemExit, match="rne-worker"):
         svc.install()
 
 
 def test_install_exits_when_dashboard_missing(monkeypatch):
-    monkeypatch.setattr("shutil.which", lambda name: FAKE_WORKER if name == "rne-worker" else None)
+    monkeypatch.setattr(
+        "shutil.which", lambda name: FAKE_WORKER if name == "rne-worker" else None
+    )
     with pytest.raises(SystemExit, match="rne-dashboard"):
         svc.install()
 

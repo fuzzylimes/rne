@@ -10,7 +10,12 @@ TERMINAL_STATUSES = ("done", "failed", "cancelled", "interrupted")
 def _worker_status() -> dict:
     row = g.conn.execute("SELECT * FROM worker_status WHERE id = 1").fetchone()
     if row is None:
-        return {"state": "unknown", "last_seen": None, "indicator": "offline", "ago": None}
+        return {
+            "state": "unknown",
+            "last_seen": None,
+            "indicator": "offline",
+            "ago": None,
+        }
 
     last_seen_str = row["last_seen"]
     try:

@@ -45,27 +45,35 @@ def main() -> None:
 
     if args.command == "ingest":
         from rne.cli.ingest import run
+
         run()
     elif args.command == "ls":
         from rne.cli.ls import run
+
         run(args)
     elif args.command == "edit":
         from rne.cli.edit import run
+
         run(args)
     elif args.command == "cancel":
         from rne.cli.manage import run_cancel
+
         run_cancel(args)
     elif args.command == "retry":
         from rne.cli.manage import run_retry
+
         run_retry(args)
     elif args.command == "pause":
         from rne.cli.manage import run_pause
+
         run_pause(args)
     elif args.command == "resume":
         from rne.cli.manage import run_resume
+
         run_resume(args)
     elif args.command == "service":
         from rne.cli.service import install, uninstall
+
         if args.service_action == "install":
             install()
         elif args.service_action == "uninstall":

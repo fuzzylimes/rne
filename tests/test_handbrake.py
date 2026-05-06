@@ -16,6 +16,7 @@ def cmd(**kwargs) -> list[str]:
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _flag_value(cmd: list[str], flag: str) -> str | None:
     """Return the token after `flag` in cmd, or None if flag is absent."""
     try:
@@ -32,6 +33,7 @@ def _has_flag(cmd: list[str], flag: str) -> bool:
 # Prefix and structure
 # ---------------------------------------------------------------------------
 
+
 def test_prefix():
     result = cmd()
     assert result[: len(config.HANDBRAKE_PREFIX)] == config.HANDBRAKE_PREFIX
@@ -46,6 +48,7 @@ def test_input_output():
 # ---------------------------------------------------------------------------
 # Default args produce a sensible command
 # ---------------------------------------------------------------------------
+
 
 def test_defaults():
     result = cmd()
@@ -64,6 +67,7 @@ def test_defaults():
 # ---------------------------------------------------------------------------
 # Audio tracks — parallel -a / -E / -B lists
 # ---------------------------------------------------------------------------
+
 
 def test_single_copy_track():
     result = cmd(audio_tracks=[AudioTrack(track=1, codec="copy")])
@@ -106,6 +110,7 @@ def test_multiple_transcode_tracks():
 # Subtitle tracks
 # ---------------------------------------------------------------------------
 
+
 def test_multiple_subtitle_tracks():
     result = cmd(subtitle_tracks=[1, 2])
     assert _flag_value(result, "-s") == "1,2"
@@ -119,6 +124,7 @@ def test_empty_subtitle_tracks_no_flag():
 # ---------------------------------------------------------------------------
 # Decomb
 # ---------------------------------------------------------------------------
+
 
 def test_decomb_true():
     result = cmd(decomb=True)
@@ -134,6 +140,7 @@ def test_decomb_false():
 # extra_args appended at the end
 # ---------------------------------------------------------------------------
 
+
 def test_extra_args_appended():
     extra = ["--crop", "0:0:0:0"]
     result = cmd(extra_args=extra)
@@ -148,6 +155,7 @@ def test_extra_args_empty():
 # ---------------------------------------------------------------------------
 # Validation
 # ---------------------------------------------------------------------------
+
 
 def test_empty_audio_tracks_raises():
     with pytest.raises(ValueError, match="audio_tracks"):

@@ -22,7 +22,9 @@ FFPROBE_DEEP_TIMEOUT = 60
 
 # Spec: "Audio codec policy" — codecs that play universally on Jellyfin clients
 # and can be muxed as-is without transcoding.
-COPY_FRIENDLY_AUDIO_CODECS: frozenset[str] = frozenset({"ac3", "eac3", "aac", "mp3", "opus"})
+COPY_FRIENDLY_AUDIO_CODECS: frozenset[str] = frozenset(
+    {"ac3", "eac3", "aac", "mp3", "opus"}
+)
 
 # Spec: "Audio codec policy" — recommended AC3 bitrates by channel count.
 AC3_BITRATE_BY_CHANNELS: dict[int, int] = {

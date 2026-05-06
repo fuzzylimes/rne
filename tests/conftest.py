@@ -45,9 +45,17 @@ def insert_job(
                           status, priority)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (show_val, season, episode, movie_val,
-         source_path, output_path, handbrake_args,
-         status, priority),
+        (
+            show_val,
+            season,
+            episode,
+            movie_val,
+            source_path,
+            output_path,
+            handbrake_args,
+            status,
+            priority,
+        ),
     )
     conn.commit()
     return cur.lastrowid

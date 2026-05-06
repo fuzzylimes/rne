@@ -1,4 +1,5 @@
 """Tests for CLI helpers and pure functions."""
+
 from __future__ import annotations
 
 import pathlib
@@ -15,6 +16,7 @@ from rne.probe import AudioStream
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _stream(codec: str, channels: int | None = None) -> AudioStream:
     return AudioStream(
@@ -57,6 +59,7 @@ def _job(
 # prompt_audio_track_decision — copy-friendly codecs (no prompt)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.parametrize("codec", ["ac3", "eac3", "aac", "mp3", "opus"])
 def test_copy_friendly_no_prompt(codec):
     result = prompt_audio_track_decision(_stream(codec, 6), 1)
@@ -72,6 +75,7 @@ def test_copy_friendly_returns_correct_track_num():
 # ---------------------------------------------------------------------------
 # prompt_audio_track_decision — non-friendly codecs prompt
 # ---------------------------------------------------------------------------
+
 
 def test_truehd_51_default_y_produces_ac3_640():
     with patch("builtins.input", return_value=""):
@@ -134,6 +138,7 @@ def test_non_friendly_unknown_channels_falls_back_to_640():
 # _audio_summary
 # ---------------------------------------------------------------------------
 
+
 def test_audio_summary_all_copy():
     tracks = [AudioTrack(track=1, codec="copy"), AudioTrack(track=2, codec="copy")]
     assert _audio_summary(tracks) == "[1:copy,2:copy]"
@@ -160,25 +165,39 @@ def test_audio_summary_empty():
 # build_preview
 # ---------------------------------------------------------------------------
 
+
 def test_build_preview_copy_track():
-    jobs = [_job("Movie", "/staging/Movie/Movie.mkv", [AudioTrack(track=1, codec="copy")])]
+    jobs = [
+        _job("Movie", "/staging/Movie/Movie.mkv", [AudioTrack(track=1, codec="copy")])
+    ]
     text = build_preview(jobs)
     assert "Movie.mkv" in text
     assert "1:copy" in text
 
 
 def test_build_preview_transcode_track():
-    jobs = [_job("Movie", "/staging/Movie/Movie.mkv", [AudioTrack(track=1, codec="ac3", bitrate=640)])]
+    jobs = [
+        _job(
+            "Movie",
+            "/staging/Movie/Movie.mkv",
+            [AudioTrack(track=1, codec="ac3", bitrate=640)],
+        )
+    ]
     text = build_preview(jobs)
     assert "1:ac3@640" in text
 
 
 def test_build_preview_mixed_tracks_format():
-    jobs = [_job(
-        "Movie",
-        "/staging/Movie/Movie.mkv",
-        [AudioTrack(track=1, codec="ac3", bitrate=640), AudioTrack(track=2, codec="copy")],
-    )]
+    jobs = [
+        _job(
+            "Movie",
+            "/staging/Movie/Movie.mkv",
+            [
+                AudioTrack(track=1, codec="ac3", bitrate=640),
+                AudioTrack(track=2, codec="copy"),
+            ],
+        )
+    ]
     text = build_preview(jobs)
     assert "[1:ac3@640,2:copy]" in text
 
@@ -203,14 +222,24 @@ def test_build_preview_multiple_episodes():
 
 
 def test_build_preview_shows_crf_and_preset():
-    jobs = [_job("M", "/s/M.mkv", [AudioTrack(track=1, codec="copy")], quality=22, preset="medium")]
+    jobs = [
+        _job(
+            "M",
+            "/s/M.mkv",
+            [AudioTrack(track=1, codec="copy")],
+            quality=22,
+            preset="medium",
+        )
+    ]
     text = build_preview(jobs)
     assert "crf=22" in text
     assert "preset=medium" in text
 
 
 def test_build_preview_shows_subtitle_tracks():
-    jobs = [_job("M", "/s/M.mkv", [AudioTrack(track=1, codec="copy")], subtitle_tracks=[2])]
+    jobs = [
+        _job("M", "/s/M.mkv", [AudioTrack(track=1, codec="copy")], subtitle_tracks=[2])
+    ]
     text = build_preview(jobs)
     assert "s=[2]" in text
 
@@ -229,8 +258,11 @@ def test_build_preview_starts_with_preview_header():
 # _build_jobs_plan — raw source path layout
 # ---------------------------------------------------------------------------
 
+
 def _default_hb_args() -> HandbrakeArgs:
-    return HandbrakeArgs(audio_tracks=[AudioTrack(track=1, codec="copy")], subtitle_tracks=[])
+    return HandbrakeArgs(
+        audio_tracks=[AudioTrack(track=1, codec="copy")], subtitle_tracks=[]
+    )
 
 
 def test_build_jobs_plan_tv_source_path_uses_raw_dir():
@@ -292,14 +324,26 @@ def test_two_batches_same_show_non_overlapping_source_paths():
     hb = _default_hb_args()
 
     plan1 = _build_jobs_plan(
-        is_tv=True, show="Initial D", season=1, episodes=[5, 6],
-        movie=None, staging_dir=staging, raw_dir=raw_batch_1,
-        surviving_indexes=[2, 3], hb_args=hb,
+        is_tv=True,
+        show="Initial D",
+        season=1,
+        episodes=[5, 6],
+        movie=None,
+        staging_dir=staging,
+        raw_dir=raw_batch_1,
+        surviving_indexes=[2, 3],
+        hb_args=hb,
     )
     plan2 = _build_jobs_plan(
-        is_tv=True, show="Initial D", season=1, episodes=[7, 8],
-        movie=None, staging_dir=staging, raw_dir=raw_batch_2,
-        surviving_indexes=[2, 3], hb_args=hb,
+        is_tv=True,
+        show="Initial D",
+        season=1,
+        episodes=[7, 8],
+        movie=None,
+        staging_dir=staging,
+        raw_dir=raw_batch_2,
+        surviving_indexes=[2, 3],
+        hb_args=hb,
     )
 
     sources1 = {j["source_path"] for j in plan1}
