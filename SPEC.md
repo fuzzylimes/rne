@@ -308,25 +308,32 @@ The whole thing fits in a venv with maybe 3 MB of installed packages.
 
 ## Storage layout
 
-Single staging directory per disc; raw and encoded files co-located:
+Raw files are isolated per ingest batch to prevent cross-batch clobbering when disc 2 is ingested while disc 1's encodes are still in the queue:
 
 ```
 /mnt/media/staging/Initial D/
-    title_t02.mkv                              ← raw from makemkv
-    title_t03.mkv
-    title_t04.mkv
-    title_t05.mkv
+    _raw/
+        batch-7/
+            title_t02.mkv                      ← raw from makemkv (disc 1)
+            title_t03.mkv
+            title_t04.mkv
+            title_t05.mkv
+        batch-9/
+            title_t00.mkv                      ← raw from makemkv (disc 2)
+            title_t01.mkv
     Season 01/
         Initial D - S01E05.mkv                 ← encoded
         Initial D - S01E06.mkv
         ...
 
 /mnt/media/staging/The Silence of the Lambs/
-    title_t00.mkv                              ← raw
+    _raw/
+        batch-12/
+            title_t00.mkv                      ← raw
     The Silence of the Lambs.mkv               ← encoded
 ```
 
-Raw files keep makemkv's `title_tNN.mkv` names. Encoded files for TV go in a `Season NN/` subdir; for movies they sit alongside the raw with the movie title as filename. After verifying, the user moves the encoded files to the real library themselves; this tool does not manage the library.
+Raw files keep makemkv's `title_tNN.mkv` names inside a `_raw/batch-{ingest_batch_id}/` subdir. Encoded files for TV go in a `Season NN/` subdir alongside `_raw/`; for movies they sit at the show root alongside `_raw/`. After verifying, the user moves the encoded files to the real library themselves; this tool does not manage the library.
 
 Output filename templates:
 
@@ -380,13 +387,15 @@ If Movie: prompt for the title, same default-from-disc behavior. One job, no epi
 
 ### Step 4 — Staging dir confirm and rip
 
+At the start of step 4, before prompting the user, the CLI creates the `ingest_batches` row in the DB and obtains its id. This id is required to construct the batch-scoped raw directory path shown to the user.
+
 Right before the rip kicks off:
 
 ```
-Rip to /mnt/media/staging/Initial D/ [Y/n]:
+Rip to /mnt/media/staging/Initial D/_raw/batch-7/ [Y/n]:
 ```
 
-`n` opens a path prompt to override. This handles "disc title was hot garbage and I forgot to fix it in step 3" without forcing every ingest through an extra prompt.
+`n` opens a path prompt to override the staging root. The batch-scoped `_raw/batch-{id}/` suffix is always appended. This handles "disc title was hot garbage and I forgot to fix it in step 3" without forcing every ingest through an extra prompt.
 
 Then run `makemkvcon mkv` for each selected title sequentially. makemkv's stdout streams to the terminal so the user sees its progress bars. If any rip fails, prompt:
 
@@ -468,7 +477,7 @@ The audio summary format `[1:ac3@640,2:copy]` shows track index, action, and bit
 
 ### Step 8 — Insert and exit
 
-Create an `ingest_batches` row, insert N `jobs` rows in `queued` state, print:
+Insert N `jobs` rows in `queued` state (the `ingest_batches` row was already created at the start of step 4), print:
 
 ```
 Queued 4 jobs (batch 17). Worker will pick them up. Run `rne ls` to check status.
@@ -737,7 +746,7 @@ systemctl --user enable --now rne-worker rne-dashboard
 - **VM reboot mid-encode.** Worker's `running` row is reconciled to `interrupted` on next start. The `.partial` output sits on disk untouched. Dashboard surfaces with retry button.
 - **Worker crash.** systemd `Restart=on-failure` brings it back within 5 seconds. Same orphan reconciliation runs.
 - **Dashboard crash.** Restarted by systemd. Worker is unaffected. The DB is the only shared state.
-- **Concurrent ingest while worker is running.** Fine — they don't share locks. Ingest writes new rows, worker may pick them up in the next claim cycle.
+- **Concurrent ingest while worker is running.** Fine — they don't share locks. Ingest writes new rows, worker may pick them up in the next claim cycle. Batch-scoped raw dirs (`_raw/batch-{id}/`) ensure that ripping disc 2 never overwrites disc 1's raw files while the worker is mid-encode.
 - **Database write contention.** WAL mode + `busy_timeout=5000` handles it. Worker writes progress every ~20s; dashboard reads on every page load. Real conflict is rare.
 - **`/mnt/media` not mounted at boot.** `ConditionPathExists` blocks both services from starting until it's there.
 

@@ -1,11 +1,12 @@
 """Tests for CLI helpers and pure functions."""
 from __future__ import annotations
 
+import pathlib
 from unittest.mock import patch
 
 import pytest
 
-from rne.cli.ingest import _audio_summary, build_preview
+from rne.cli.ingest import _audio_summary, _build_jobs_plan, build_preview
 from rne.cli.prompts import prompt_audio_track_decision
 from rne.models import AudioTrack, HandbrakeArgs
 from rne.probe import AudioStream
@@ -218,6 +219,92 @@ def test_build_preview_starts_with_preview_header():
     jobs = [_job("M", "/s/M.mkv", [AudioTrack(track=1, codec="copy")])]
     text = build_preview(jobs)
     assert text.startswith("Preview:")
+
+
+# ---------------------------------------------------------------------------
+# argparse dispatcher
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# _build_jobs_plan — raw source path layout
+# ---------------------------------------------------------------------------
+
+def _default_hb_args() -> HandbrakeArgs:
+    return HandbrakeArgs(audio_tracks=[AudioTrack(track=1, codec="copy")], subtitle_tracks=[])
+
+
+def test_build_jobs_plan_tv_source_path_uses_raw_dir():
+    staging = pathlib.Path("/mnt/media/staging/Initial D")
+    raw = staging / "_raw" / "batch-7"
+    plan = _build_jobs_plan(
+        is_tv=True,
+        show="Initial D",
+        season=1,
+        episodes=[5],
+        movie=None,
+        staging_dir=staging,
+        raw_dir=raw,
+        surviving_indexes=[2],
+        hb_args=_default_hb_args(),
+    )
+    assert plan[0]["source_path"] == str(raw / "title_t02.mkv")
+
+
+def test_build_jobs_plan_movie_source_path_uses_raw_dir():
+    staging = pathlib.Path("/mnt/media/staging/Aliens")
+    raw = staging / "_raw" / "batch-3"
+    plan = _build_jobs_plan(
+        is_tv=False,
+        show=None,
+        season=None,
+        episodes=None,
+        movie="Aliens",
+        staging_dir=staging,
+        raw_dir=raw,
+        surviving_indexes=[0],
+        hb_args=_default_hb_args(),
+    )
+    assert plan[0]["source_path"] == str(raw / "title_t00.mkv")
+
+
+def test_build_jobs_plan_output_path_unchanged_for_tv():
+    staging = pathlib.Path("/mnt/media/staging/Initial D")
+    raw = staging / "_raw" / "batch-7"
+    plan = _build_jobs_plan(
+        is_tv=True,
+        show="Initial D",
+        season=1,
+        episodes=[5],
+        movie=None,
+        staging_dir=staging,
+        raw_dir=raw,
+        surviving_indexes=[2],
+        hb_args=_default_hb_args(),
+    )
+    expected_out = str(staging / "Season 01" / "Initial D - S01E05.mkv")
+    assert plan[0]["output_path"] == expected_out
+
+
+def test_two_batches_same_show_non_overlapping_source_paths():
+    staging = pathlib.Path("/mnt/media/staging/Initial D")
+    raw_batch_1 = staging / "_raw" / "batch-1"
+    raw_batch_2 = staging / "_raw" / "batch-2"
+    hb = _default_hb_args()
+
+    plan1 = _build_jobs_plan(
+        is_tv=True, show="Initial D", season=1, episodes=[5, 6],
+        movie=None, staging_dir=staging, raw_dir=raw_batch_1,
+        surviving_indexes=[2, 3], hb_args=hb,
+    )
+    plan2 = _build_jobs_plan(
+        is_tv=True, show="Initial D", season=1, episodes=[7, 8],
+        movie=None, staging_dir=staging, raw_dir=raw_batch_2,
+        surviving_indexes=[2, 3], hb_args=hb,
+    )
+
+    sources1 = {j["source_path"] for j in plan1}
+    sources2 = {j["source_path"] for j in plan2}
+    assert sources1.isdisjoint(sources2), "batch source paths must not overlap"
 
 
 # ---------------------------------------------------------------------------

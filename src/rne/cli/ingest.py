@@ -134,12 +134,13 @@ def _build_jobs_plan(
     episodes: list[int] | None,
     movie: str | None,
     staging_dir: pathlib.Path,
+    raw_dir: pathlib.Path,
     surviving_indexes: list[int],
     hb_args: HandbrakeArgs,
 ) -> list[dict]:
     jobs = []
     for idx_pos, title_idx in enumerate(surviving_indexes):
-        source = str(staging_dir / f"title_t{title_idx:02d}.mkv")
+        source = str(raw_dir / f"title_t{title_idx:02d}.mkv")
 
         if is_tv:
             ep = episodes[idx_pos]  # type: ignore[index]
@@ -227,25 +228,33 @@ def _edit_plan(jobs_plan: list[dict]) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# DB insertion (Step 8)
+# DB insertion
 # ---------------------------------------------------------------------------
 
-def _insert_batch(
+def _create_ingest_batch(
     conn,
-    jobs_plan: list[dict],
     *,
     is_tv: bool,
     show: str | None,
     movie: str | None,
+    season: int | None,
     notes: str,
 ) -> int:
-    label = f"{show} S{jobs_plan[0]['season']:02d}" if is_tv else str(movie)
+    """Create the ingest_batches row and return its id.
+
+    Called before ripping so the batch id can be used in the raw dir path.
+    """
+    label = f"{show} S{season:02d}" if is_tv else str(movie)
     cur = conn.execute(
         "INSERT INTO ingest_batches (label, show, movie, notes) VALUES (?, ?, ?, ?)",
         (label, show, movie, notes),
     )
-    batch_id = cur.lastrowid
+    conn.commit()
+    return cur.lastrowid
 
+
+def _insert_jobs(conn, batch_id: int, jobs_plan: list[dict]) -> None:
+    """Insert job rows for an already-created ingest batch."""
     for job in jobs_plan:
         hb: HandbrakeArgs = job["handbrake_args"]
         # Ensure output directory exists before the worker runs.
@@ -268,9 +277,7 @@ def _insert_batch(
                 batch_id,
             ),
         )
-
     conn.commit()
-    return batch_id
 
 
 # ---------------------------------------------------------------------------
@@ -365,17 +372,34 @@ def run() -> None:
         episodes = None
         movie = prompts.prompt_with_default("Movie title", volume_name)
 
-    # ---- Step 4: staging dir confirm and rip -----------------------------------
+    # ---- Step 4: staging dir confirm, create batch row, and rip ---------------
     staging_dir = pathlib.Path(config.STAGING_ROOT) / (show if is_tv else movie)  # type: ignore[arg-type]
 
-    print()
-    if not prompts.prompt_yes_no(f"Rip to {staging_dir}/"):
-        staging_dir = pathlib.Path(input("Staging directory: ").strip())
+    # Open DB and create the ingest_batches row now so its id becomes part of
+    # the raw dir path.  An abort after this point leaves an orphaned batch row;
+    # that is acceptable — the row carries no job data and no real-data exists yet.
+    conn = db.connect()
+    db.init_db(conn)
+    batch_id = _create_ingest_batch(
+        conn,
+        is_tv=is_tv,
+        show=show,
+        movie=movie,
+        season=season,
+        notes=volume_name,
+    )
 
-    staging_dir.mkdir(parents=True, exist_ok=True)
+    raw_dir = staging_dir / "_raw" / f"batch-{batch_id}"
+
+    print()
+    if not prompts.prompt_yes_no(f"Rip to {raw_dir}/"):
+        staging_dir = pathlib.Path(input("Staging directory: ").strip())
+        raw_dir = staging_dir / "_raw" / f"batch-{batch_id}"
+
+    raw_dir.mkdir(parents=True, exist_ok=True)
 
     failed_idxs = makemkv.run_rips(
-        disc=0, minlength=0, outdir=str(staging_dir), indexes=selected_indexes
+        disc=0, minlength=0, outdir=str(raw_dir), indexes=selected_indexes
     )
 
     surviving_indexes = list(selected_indexes)
@@ -406,7 +430,7 @@ def run() -> None:
         ]
 
     # ---- Step 5: probe first ripped file ---------------------------------------
-    first_source = staging_dir / f"title_t{surviving_indexes[0]:02d}.mkv"
+    first_source = raw_dir / f"title_t{surviving_indexes[0]:02d}.mkv"
     print(f"\nProbing {first_source.name} ...")
 
     try:
@@ -420,7 +444,7 @@ def run() -> None:
 
     # Warn if later files differ (best-effort: just check file count variation)
     if len(surviving_indexes) > 1:
-        second_source = staging_dir / f"title_t{surviving_indexes[1]:02d}.mkv"
+        second_source = raw_dir / f"title_t{surviving_indexes[1]:02d}.mkv"
         if second_source.exists():
             try:
                 probe2 = probe.summarize(probe.probe(str(second_source)))
@@ -532,6 +556,7 @@ def run() -> None:
         episodes=surviving_episodes,
         movie=movie,
         staging_dir=staging_dir,
+        raw_dir=raw_dir,
         surviving_indexes=surviving_indexes,
         hb_args=hb_args,
     )
@@ -551,17 +576,7 @@ def run() -> None:
         jobs_plan = _edit_plan(jobs_plan)
 
     # ---- Step 8: insert and exit -----------------------------------------------
-    conn = db.connect()
-    db.init_db(conn)
-
-    batch_id = _insert_batch(
-        conn,
-        jobs_plan,
-        is_tv=is_tv,
-        show=show,
-        movie=movie,
-        notes=volume_name,
-    )
+    _insert_jobs(conn, batch_id, jobs_plan)
 
     print(
         f"\nQueued {len(jobs_plan)} job(s) (batch {batch_id}). "
