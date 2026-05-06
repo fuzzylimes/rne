@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="refresh" content="30">
+  <title>{% block title %}rne{% endblock %}</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+  <style>
+    .dot { display: inline-block; width: .7em; height: .7em; border-radius: 50%; margin-right: .35em; }
+    .dot-green  { background: #22c55e; }
+    .dot-amber  { background: #f59e0b; }
+    .dot-red    { background: #ef4444; }
+    .dot-offline{ background: #6b7280; }
+    .progress-bar { background: var(--pico-muted-border-color); border-radius: 4px; height: 8px; overflow: hidden; display: inline-block; width: 120px; vertical-align: middle; }
+    .progress-bar-fill { height: 100%; background: var(--pico-primary); }
+    .banner-paused { background: var(--pico-del-color); color: #fff; text-align: center; padding: .4rem; font-weight: bold; }
+    form.inline { display: inline; }
+    @media (max-width: 600px) {
+      .col-eta  { display: none; }
+      .col-show, .col-ep { display: block; }
+      .col-show::after { content: " · "; }
+    }
+  </style>
+</head>
+<body>
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>
