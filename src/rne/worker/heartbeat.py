@@ -3,10 +3,8 @@ from __future__ import annotations
 import os
 import threading
 import time
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    import sqlite3
+from rne import db
 
 _state: str = "starting"
 _current_job_id: int | None = None
@@ -20,7 +18,10 @@ def set_state(state: str, job_id: int | None = None) -> None:
         _current_job_id = job_id
 
 
-def _heartbeat_loop(conn: "sqlite3.Connection") -> None:
+def _heartbeat_loop(db_path: str | None) -> None:
+    # Own connection — sqlite3 connections are not thread-safe; sharing the
+    # main thread's connection would cause data corruption under concurrent use.
+    conn = db.connect(db_path)
     while True:
         with _lock:
             state = _state
@@ -37,7 +38,7 @@ def _heartbeat_loop(conn: "sqlite3.Connection") -> None:
         time.sleep(10)
 
 
-def start_heartbeat_thread(conn: "sqlite3.Connection") -> threading.Thread:
-    t = threading.Thread(target=_heartbeat_loop, args=(conn,), daemon=True)
+def start_heartbeat_thread(db_path: str | None = None) -> threading.Thread:
+    t = threading.Thread(target=_heartbeat_loop, args=(db_path,), daemon=True)
     t.start()
     return t

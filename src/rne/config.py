@@ -17,8 +17,7 @@ DEFAULT_QUALITY = 20
 DEFAULT_PRESET = "slow"
 DEFAULT_AUDIO_CODEC = "copy"
 
-FFPROBE_TIMEOUT = 30
-FFPROBE_DEEP_TIMEOUT = 60
+FFPROBE_TIMEOUT = 60  # standard probe only; rne probe --deep has no timeout
 
 # Spec: "Audio codec policy" — codecs that play universally on Jellyfin clients
 # and can be muxed as-is without transcoding.

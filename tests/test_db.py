@@ -1,6 +1,28 @@
+import pathlib
+import threading
+
 from rne import db
 from rne.models import HandbrakeArgs, Job
 from tests.conftest import insert_job
+
+
+# ---------------------------------------------------------------------------
+# connect() — parent directory creation (case 1)
+# ---------------------------------------------------------------------------
+
+
+def test_connect_creates_parent_dir(tmp_path):
+    db_path = str(tmp_path / "state" / "rne" / "jobs.db")
+    conn = db.connect(db_path)
+    conn.close()
+    assert pathlib.Path(db_path).exists()
+
+
+def test_connect_creates_nested_parent_dir(tmp_path):
+    db_path = str(tmp_path / "a" / "b" / "c" / "jobs.db")
+    conn = db.connect(db_path)
+    conn.close()
+    assert pathlib.Path(db_path).parent.is_dir()
 
 
 # ---------------------------------------------------------------------------
@@ -258,3 +280,79 @@ def test_handbrake_args_roundtrip_empty_lists(conn):
     assert restored.audio_tracks == []
     assert restored.subtitle_tracks == []
     assert restored.extra_args == []
+
+
+# ---------------------------------------------------------------------------
+# claim_next_job atomicity (case 3)
+# ---------------------------------------------------------------------------
+
+
+def test_claim_next_job_atomic_under_concurrent_access(tmp_path):
+    """Two threads racing claim_next_job on one queued job: exactly one wins."""
+    db_path = str(tmp_path / "race.db")
+    setup = db.connect(db_path)
+    db.init_db(setup)
+    setup.execute(
+        """
+        INSERT INTO jobs (movie, source_path, output_path, handbrake_args, status)
+        VALUES ('Aliens', '/s/a.mkv', '/o/a.mkv', '{}', 'queued')
+        """
+    )
+    setup.commit()
+    setup.close()
+
+    results: list = []
+
+    def claim():
+        c = db.connect(db_path)
+        results.append(db.claim_next_job(c))
+        c.close()
+
+    t1 = threading.Thread(target=claim)
+    t2 = threading.Thread(target=claim)
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    claimed = [j for j in results if j is not None]
+    assert len(claimed) == 1, "exactly one thread should claim the job"
+
+
+# ---------------------------------------------------------------------------
+# retry clears timing fields (case 4)
+# ---------------------------------------------------------------------------
+
+
+def test_retry_clears_started_at_and_finished_at(conn):
+    job_id = insert_job(conn, status="failed")
+    conn.execute(
+        "UPDATE jobs SET started_at = '2026-01-01', finished_at = '2026-01-02' WHERE id = ?",
+        (job_id,),
+    )
+    conn.commit()
+
+    conn.execute(
+        """
+        UPDATE jobs
+        SET    status        = 'queued',
+               attempt_count = attempt_count + 1,
+               progress_pct  = NULL,
+               progress_fps  = NULL,
+               progress_eta  = NULL,
+               error_message = NULL,
+               exit_code     = NULL,
+               started_at    = NULL,
+               finished_at   = NULL
+        WHERE  id = ? AND status IN ('done','failed','cancelled','interrupted')
+        """,
+        (job_id,),
+    )
+    conn.commit()
+
+    row = conn.execute(
+        "SELECT status, started_at, finished_at FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()
+    assert row["status"] == "queued"
+    assert row["started_at"] is None
+    assert row["finished_at"] is None

@@ -4,6 +4,8 @@ import json
 import subprocess
 from dataclasses import dataclass
 
+from rne import config
+
 
 @dataclass
 class VideoStream:
@@ -56,7 +58,9 @@ def probe(mkv_path: str) -> dict:
         "-show_format",
         mkv_path,
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, check=True, timeout=config.FFPROBE_TIMEOUT
+    )
     return json.loads(result.stdout)
 
 
@@ -78,14 +82,6 @@ def _yn(d: dict, key: str) -> bool:
 def summarize(probe_data: dict) -> StreamSummary:
     """Build a StreamSummary from the dict returned by probe()."""
     streams = probe_data.get("streams", [])
-    fmt = probe_data.get("format", {})
-
-    raw_audio = [s for s in streams if s.get("codec_type") == "audio"]
-    num_audio = len(raw_audio) or 1
-
-    # Format-level bitrate used as fallback when stream.bit_rate is absent
-    fmt_br_str = fmt.get("bit_rate")
-    fmt_br = int(fmt_br_str) if fmt_br_str else None
 
     video_streams: list[VideoStream] = []
     audio_streams: list[AudioStream] = []
@@ -113,12 +109,7 @@ def summarize(probe_data: dict) -> StreamSummary:
 
         elif codec_type == "audio":
             raw_br = s.get("bit_rate")
-            if raw_br:
-                bitrate: int | None = int(raw_br)
-            elif fmt_br is not None:
-                bitrate = fmt_br // num_audio
-            else:
-                bitrate = None
+            bitrate: int | None = int(raw_br) if raw_br else None
             raw_ch = s.get("channels")
             audio_streams.append(
                 AudioStream(

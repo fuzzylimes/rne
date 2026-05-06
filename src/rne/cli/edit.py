@@ -39,13 +39,21 @@ def run(args) -> None:
             try:
                 with open(tmp) as f:
                     new_args = HandbrakeArgs.from_json(f.read())
-                break
             except Exception as exc:
                 print(f"Validation error: {exc}", file=sys.stderr)
                 raw = input("Re-open editor? [Y/n]: ").strip().lower()
                 if raw not in ("", "y"):
                     print("Edit cancelled.", file=sys.stderr)
                     sys.exit(1)
+                continue
+
+            recheck = conn.execute(
+                "SELECT status FROM jobs WHERE id = ?", (args.id,)
+            ).fetchone()
+            if recheck["status"] == JobStatus.RUNNING:
+                print("job is now running; cannot edit", file=sys.stderr)
+                sys.exit(1)
+            break
 
         conn.execute(
             "UPDATE jobs SET handbrake_args = ? WHERE id = ?",

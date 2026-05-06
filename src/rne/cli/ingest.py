@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -10,6 +11,15 @@ import tempfile
 from rne import config, db, makemkv, probe
 from rne.cli import prompts
 from rne.models import AudioTrack, HandbrakeArgs
+
+# Characters stripped from user-supplied path components, mirroring .abcde.conf:
+#   sed 's/[:><|*/\"'\''?[:cntrl:]]//g'
+_MUNGE_RE = re.compile(r"""[:<>|*/\\"'?]|[\x00-\x1f\x7f]""")
+
+
+def mungefilename(name: str) -> str:
+    """Strip characters that are unsafe in filesystem paths."""
+    return _MUNGE_RE.sub("", name)
 
 
 # ---------------------------------------------------------------------------
@@ -343,7 +353,7 @@ def run() -> None:
     is_tv = choice == "1"
 
     if is_tv:
-        show = prompts.prompt_with_default("Show", volume_name)
+        show = mungefilename(prompts.prompt_with_default("Show", volume_name))
 
         while True:
             try:
@@ -376,7 +386,7 @@ def run() -> None:
         show = None
         season = None
         episodes = None
-        movie = prompts.prompt_with_default("Movie title", volume_name)
+        movie = mungefilename(prompts.prompt_with_default("Movie title", volume_name))
 
     # ---- Step 4: staging dir confirm, create batch row, and rip ---------------
     staging_dir = pathlib.Path(config.STAGING_ROOT) / (show if is_tv else movie)  # type: ignore[arg-type]

@@ -36,7 +36,7 @@ def main() -> None:
     db.reconcile_orphans(conn)
 
     heartbeat.set_state("idle")
-    heartbeat.start_heartbeat_thread(conn)
+    heartbeat.start_heartbeat_thread()  # opens its own connection
 
     while not _shutdown.is_set():
         if _queue_paused(conn):

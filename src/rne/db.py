@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pathlib
 import sqlite3
 from typing import TYPE_CHECKING
 
@@ -77,7 +78,9 @@ INSERT OR IGNORE INTO queue_settings (id) VALUES (1);
 
 
 def connect(db_path: str | None = None) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path or config.DB_PATH)
+    path = pathlib.Path(db_path or config.DB_PATH)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA busy_timeout = 5000")
@@ -98,6 +101,9 @@ def init_db(conn: sqlite3.Connection) -> None:
 def claim_next_job(conn: sqlite3.Connection) -> "Job | None":
     from rne.models import Job
 
+    # BEGIN IMMEDIATE acquires the write lock up-front so two workers started
+    # accidentally at the same time cannot race to claim the same job.
+    conn.execute("BEGIN IMMEDIATE")
     row = conn.execute("""
         UPDATE jobs
         SET    status        = 'running',
@@ -116,9 +122,9 @@ def claim_next_job(conn: sqlite3.Connection) -> "Job | None":
         )
         RETURNING *
     """).fetchone()
+    conn.commit()
     if row is None:
         return None
-    conn.commit()
     return Job.from_row(row)
 
 

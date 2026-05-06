@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import sqlite3
+import time
 
 import pytest
 
 from rne import db
+from rne.worker import heartbeat
 from tests.conftest import insert_job
 
 
@@ -74,3 +76,30 @@ def test_reconcile_sets_finished_at(mem_conn):
         "SELECT finished_at FROM jobs WHERE id = ?", (job_id,)
     ).fetchone()
     assert row["finished_at"] is not None
+
+
+# ---------------------------------------------------------------------------
+# heartbeat thread opens its own connection (case 2)
+# ---------------------------------------------------------------------------
+
+
+def test_heartbeat_uses_own_connection(tmp_path):
+    """Heartbeat writes last_seen via its own connection, not the caller's."""
+    db_path = str(tmp_path / "hb.db")
+    setup = db.connect(db_path)
+    db.init_db(setup)
+    # Stamp last_seen far in the past so any update is detectable.
+    setup.execute("UPDATE worker_status SET last_seen = '2000-01-01' WHERE id = 1")
+    setup.commit()
+    setup.close()
+
+    heartbeat.set_state("idle")
+    heartbeat.start_heartbeat_thread(db_path=db_path)
+    time.sleep(0.5)  # heartbeat writes immediately before its first sleep
+
+    verify = db.connect(db_path)
+    row = verify.execute("SELECT last_seen, state FROM worker_status WHERE id=1").fetchone()
+    verify.close()
+
+    assert row["last_seen"] != "2000-01-01", "heartbeat must have updated last_seen"
+    assert row["state"] == "idle"

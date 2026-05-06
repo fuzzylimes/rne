@@ -88,7 +88,7 @@ Notes on transitions:
 - `running → cancelled` does not exist. To stop a running job, `systemctl stop rne-worker`. The worker's SIGTERM handler forwards to the HandBrake child; on next start, `running` rows with no live worker are reconciled to `interrupted`.
 - `paused` is for queued jobs the user wants to keep but skip. The worker never claims paused jobs.
 - `cancelled` is terminal removal from the queue, available via CLI only. The dashboard does not expose cancel.
-- Retry resets the row to `queued`, increments `attempt_count`, and clears progress fields and `error_message`. Retry works from any terminal state including `done` (the user may have realized they picked the wrong audio track).
+- Retry resets the row to `queued`, increments `attempt_count`, and clears `progress_pct`, `progress_fps`, `progress_eta`, `error_message`, `exit_code`, `started_at`, and `finished_at`. Clearing `started_at` and `finished_at` is required: the dashboard's "Recent (last 24h)" query filters on `finished_at`, so a retried job with a stale `finished_at` would reappear in that section until it actually finishes. Retry works from any terminal state including `done` (the user may have realized they picked the wrong audio track). When a `done` job is retried, the worker produces a new `{output_path}.partial` that is atomically renamed over the existing output file — this is intentional: it lets the user correct a wrong audio track selection without manual cleanup.
 
 ### Schema
 
@@ -410,10 +410,10 @@ Never silently queue a partial batch.
 Run `ffprobe` on file 1, print the video/audio/subtitle table. Extends the existing `mkvprobe-format.py` output:
 
 - **Video**: as today (codec, resolution, fps, field order, lang, default, forced).
-- **Audio**: add a **Bitrate** column and a **Channels** column. Bitrate is read from `stream.bit_rate` (always present for AC3/DTS, sometimes missing for TrueHD where it's container-level — fall back to format-level bitrate divided across audio streams, or leave blank). Channels from `stream.channels`. Bitrate catches the common Blu-ray case where two tracks are both labeled AC3 but one is 10× the other; channels feeds the transcode-bitrate recommendation in step 6.
+- **Audio**: add a **Bitrate** column and a **Channels** column. Bitrate is read from `stream.bit_rate` (always present for AC3/DTS, sometimes missing for TrueHD where it's container-level). If `bit_rate` is absent for a stream, the probe table shows `—` for that track; no arithmetic fallback is performed. Channels from `stream.channels`. Bitrate catches the common Blu-ray case where two tracks are both labeled AC3 but one is 10× the other; channels feeds the transcode-bitrate recommendation in step 6.
 - **Subtitles**: add a **Duration** column. ffprobe reports stream duration from the header for free. Full subtitle tracks span the movie's duration; forced subtitle tracks span much less (sum of forced display times). This is a free, reliable signal for forced-vs-full classification — the `forced` disposition flag from MakeMKV has been observed to be unreliable.
 
-**Deep packet scan is opt-in only.** The full `-count_packets` scan exists as a separate `rne probe --deep <file>` command with a 60s timeout. It is not run automatically — observed to take >5 minutes on a 30 GB Blu-ray, which is unacceptable for the ingest path.
+**Deep packet scan is opt-in only.** The full `-count_packets` scan exists as a separate `rne probe --deep <file>` command. It is not run automatically — observed to take >5 minutes on a 30 GB Blu-ray, which is unacceptable for the ingest path. The 60s timeout applies to the standard `rne probe` path only; `rne probe --deep` has no built-in timeout (the user invoked it knowing it is slow and can Ctrl-C).
 
 If subsequent files in the batch differ in track layout, warn but continue — most discs are uniform.
 
@@ -488,7 +488,11 @@ CLI exits. The worker (running independently under systemd) claims the first job
 ## Other CLI subcommands
 
 - **`rne ls`** — list jobs with status, optionally filtered. `--all` shows full history. Default shows queued + running + recent terminal states.
-- **`rne edit <id>`** — opens that job's `handbrake_args` JSON in `$EDITOR`. On save, validates and writes back. **Refuses to edit a `running` job** with a non-zero exit. Editing other states (queued, paused, failed, interrupted, cancelled, done) is allowed.
+- **`rne edit <id>`** — opens that job's `handbrake_args` JSON in `$EDITOR`. On save, validates and writes back. **Refuses to edit a `running` job** with a non-zero exit. Editing other states (queued, paused, failed, interrupted, cancelled, done) is allowed. Validation criteria (all must pass; on failure the user is offered a chance to re-open the editor):
+  1. **JSON parses** — the file content is valid JSON.
+  2. **Conforms to `HandbrakeArgs` schema** — the top-level object contains only the known fields (`encoder`, `quality`, `preset`, `audio_tracks`, `subtitle_tracks`, `decomb`, `extra_args`); unknown keys are rejected.
+  3. **`AudioTrack` invariant** — for each entry in `audio_tracks`: `bitrate` is required (positive integer) when `codec != "copy"`, and must be absent when `codec == "copy"`.
+  4. **TOCTOU re-check** — after the editor closes and validation passes, re-query the job's status. If it has transitioned to `running` while the editor was open, refuse the save with the message `"job is now running; cannot edit"` and exit non-zero. This guards against the race where the worker claims a queued job while the user is editing it.
 - **`rne cancel <id>`** — terminal removal of a queued job. Sets status to `cancelled`. CLI only — not exposed in the dashboard.
 - **`rne retry <id>`** — resets any terminal-state job back to `queued`. Bumps `attempt_count`, clears progress and error fields.
 - **`rne pause`** / **`rne resume`** — toggle the global `queue_settings.paused` flag. The worker checks this between jobs.

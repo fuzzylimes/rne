@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from rne.cli.ingest import _audio_summary, _build_jobs_plan, build_preview
+from rne.cli.ingest import _audio_summary, _build_jobs_plan, build_preview, mungefilename
 from rne.cli.prompts import prompt_audio_track_decision
 from rne.models import AudioTrack, HandbrakeArgs
 from rne.probe import AudioStream
@@ -411,3 +411,118 @@ def test_parser_resume():
 def test_parser_requires_subcommand():
     with pytest.raises(SystemExit):
         _build_parser().parse_args([])
+
+
+# ---------------------------------------------------------------------------
+# mungefilename (case 5)
+# ---------------------------------------------------------------------------
+
+
+def test_mungefilename_strips_colon():
+    assert mungefilename("Star Wars: A New Hope") == "Star Wars A New Hope"
+
+
+def test_mungefilename_strips_all_unsafe_chars():
+    assert mungefilename('foo/bar\\baz<>|*"\'?') == "foobarbaz"
+
+
+def test_mungefilename_strips_control_chars():
+    assert mungefilename("foo\x00bar\x1fbaz\x7f") == "foobarbaz"
+
+
+def test_mungefilename_preserves_safe_chars():
+    assert mungefilename("Initial D - S01E05") == "Initial D - S01E05"
+
+
+def test_mungefilename_empty_string():
+    assert mungefilename("") == ""
+
+
+def test_mungefilename_all_unsafe_becomes_empty():
+    assert mungefilename(":/\\*?<>|") == ""
+
+
+# ---------------------------------------------------------------------------
+# rne edit validation (spec §Other CLI subcommands)
+# ---------------------------------------------------------------------------
+
+
+def test_edit_validation_invalid_json():
+    """Bullet 1: file content must be valid JSON."""
+    with pytest.raises(Exception):
+        HandbrakeArgs.from_json("{not valid json")
+
+
+def test_edit_validation_unknown_field_rejected():
+    """Bullet 2: unknown keys in the HandbrakeArgs object are rejected."""
+    import json
+
+    bad = json.dumps(
+        {
+            "encoder": "x265",
+            "quality": 20,
+            "preset": "slow",
+            "audio_tracks": [],
+            "subtitle_tracks": [],
+            "decomb": False,
+            "extra_args": [],
+            "unknown_field": "oops",
+        }
+    )
+    with pytest.raises(TypeError):
+        HandbrakeArgs.from_json(bad)
+
+
+def test_edit_validation_audio_track_bitrate_required_for_transcode():
+    """Bullet 3: bitrate required when codec != 'copy'."""
+    with pytest.raises(ValueError):
+        AudioTrack(track=1, codec="ac3", bitrate=None)
+
+
+def test_edit_validation_audio_track_bitrate_rejected_for_copy():
+    """Bullet 3: bitrate must be absent when codec == 'copy'."""
+    with pytest.raises(ValueError):
+        AudioTrack(track=1, codec="copy", bitrate=640)
+
+
+def test_edit_toctou_job_running_refused(tmp_path):
+    """Bullet 4: if the job transitions to running while the editor is open,
+    the save is refused with 'job is now running; cannot edit'."""
+    import json
+    import types
+
+    from rne import db
+    from rne.cli import edit as edit_mod
+    from tests.conftest import insert_job
+
+    db_path = str(tmp_path / "toctou.db")
+    conn = db.connect(db_path)
+    db.init_db(conn)
+    job_id = insert_job(conn, status="queued")
+    conn.close()
+
+    # Save the real db.connect before patching, since the patch affects the
+    # shared module object and would otherwise intercept fake_editor's calls too.
+    real_connect = db.connect
+
+    def fake_editor(cmd, **kwargs):
+        # Simulate the worker claiming the job while the editor is open.
+        c = real_connect(db_path)
+        c.execute("UPDATE jobs SET status='running' WHERE id=?", (job_id,))
+        c.commit()
+        c.close()
+        # Write valid JSON to the tempfile so validation passes.
+        tmp_file = cmd[1]
+        with open(tmp_file, "w") as f:
+            json.dump(json.loads(HandbrakeArgs().to_json()), f)
+        result = types.SimpleNamespace(returncode=0)
+        return result
+
+    args = types.SimpleNamespace(id=job_id)
+
+    with patch("rne.cli.edit.db.connect", side_effect=lambda *_: real_connect(db_path)):
+        with patch("rne.cli.edit.subprocess.run", side_effect=fake_editor):
+            with pytest.raises(SystemExit) as exc_info:
+                edit_mod.run(args)
+
+    assert exc_info.value.code == 1

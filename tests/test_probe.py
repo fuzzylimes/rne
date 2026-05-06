@@ -112,10 +112,10 @@ def test_audio_ac3_bitrate_direct(summary):
     assert summary.audio[1].bitrate == 448000
 
 
-def test_audio_truehd_bitrate_fallback(summary):
-    # TrueHD has no stream bit_rate — falls back to format bit_rate // num_audio
-    # format bit_rate=34038867, 11 audio streams → 34038867 // 11 = 3094442
-    assert summary.audio[0].bitrate == 34038867 // 11
+def test_audio_truehd_bitrate_none_when_absent(summary):
+    # TrueHD has no stream bit_rate — probe table shows None (displayed as —).
+    # No arithmetic fallback is performed.
+    assert summary.audio[0].bitrate is None
 
 
 def test_audio_title_present(summary):
