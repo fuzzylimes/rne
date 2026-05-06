@@ -20,6 +20,10 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/rne"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"src/rne/systemd/rne-worker.service" = "rne/systemd/rne-worker.service"
+"src/rne/systemd/rne-dashboard.service" = "rne/systemd/rne-dashboard.service"
+
 [dependency-groups]
 dev = [
     "pytest>=9.0.3",

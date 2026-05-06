@@ -4,7 +4,7 @@ A personal media pipeline that takes a Blu-ray or DVD from disc to encoded MKV w
 
 ## Background
 
-The author currently runs a manual three-step process on a dedicated VM (`rip` on `192.168.50.176`):
+The author currently runs a manual three-step process on a dedicated VM:
 
 1. Identify and select titles from a disc with `mkvrip` (a wrapper around `makemkvcon info`).
 2. Rip selected titles to staging.
@@ -33,7 +33,7 @@ This worked acceptably for DVDs, where rip and encode times were roughly 1:1. Wi
 
 | Item | Value |
 |---|---|
-| Host | `rip` VM on the home Proxmox cluster, `192.168.50.176` |
+| Host | `rip` VM on the home Proxmox cluster |
 | OS | Ubuntu 24.04 |
 | User | `rip` (member of `mediagroup`, GID 1500) |
 | Python | 3.12+ |
@@ -229,9 +229,6 @@ The prompt itself only appears when the source codec is *not* in `COPY_FRIENDLY_
 rne/
 ├── pyproject.toml
 ├── README.md
-├── systemd/
-│   ├── rne-worker.service
-│   └── rne-dashboard.service
 └── src/rne/
     ├── __init__.py
     ├── __main__.py          # python -m rne dispatch
@@ -241,12 +238,17 @@ rne/
     ├── handbrake.py         # args JSON → command list (pure function)
     ├── probe.py             # ffprobe wrapper, stream summary
     ├── makemkv.py           # makemkvcon wrapper
+    ├── systemd/
+    │   ├── __init__.py
+    │   ├── rne-worker.service
+    │   └── rne-dashboard.service
     ├── cli/
     │   ├── __init__.py      # argparse dispatcher
     │   ├── ingest.py        # the disc-to-queue interactive flow
     │   ├── ls.py
     │   ├── edit.py
     │   ├── manage.py        # cancel, retry, pause, resume
+    │   ├── service.py       # rne service install / uninstall
     │   └── prompts.py       # shared input helpers
     ├── worker/
     │   ├── __init__.py
@@ -674,7 +676,7 @@ ConditionPathExists=/mnt/media
 Type=simple
 User=rip
 Group=mediagroup
-ExecStart=/home/rip/.local/bin/rne-worker
+ExecStart=__RNE_WORKER_BIN__
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30
@@ -686,6 +688,8 @@ Environment=RNE_DB=/home/rip/.local/state/rne/jobs.db
 [Install]
 WantedBy=multi-user.target
 ```
+
+`__RNE_WORKER_BIN__` is substituted with the resolved binary path at install time by `rne service install`.
 
 - `Restart=on-failure` brings the worker back automatically on crash.
 - `RestartSec=5` prevents tight crash loops.
@@ -705,7 +709,7 @@ ConditionPathExists=/mnt/media
 Type=simple
 User=rip
 Group=mediagroup
-ExecStart=/home/rip/.local/bin/rne-dashboard
+ExecStart=__RNE_DASHBOARD_BIN__
 Restart=on-failure
 RestartSec=5
 Environment=HOME=/home/rip
@@ -715,16 +719,18 @@ Environment=RNE_DB=/home/rip/.local/state/rne/jobs.db
 WantedBy=multi-user.target
 ```
 
+`__RNE_DASHBOARD_BIN__` is substituted with the resolved binary path at install time by `rne service install`.
+
 Same shape minus the nice boost and stop timeout. `ConditionPathExists` is arguably overkill here since the dashboard doesn't touch `/mnt/media` directly, but matching the worker's startup conditions keeps both from racing weird boot states.
 
 ### Install
 
 ```
-systemctl --user enable --now rne-worker.service
-systemctl --user enable --now rne-dashboard.service
+rne service install
+systemctl --user enable --now rne-worker rne-dashboard
 ```
 
-(or system-level if preferred — paths are written assuming `--user`, adjust as needed)
+`rne service install` resolves the `rne-worker` and `rne-dashboard` binaries from PATH, writes the unit files to `~/.config/systemd/user/`, and runs `systemctl --user daemon-reload`.
 
 ## Reliability properties
 

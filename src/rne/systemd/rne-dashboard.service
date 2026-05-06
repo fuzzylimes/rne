@@ -1,5 +1,5 @@
 [Unit]
-Description=rne encoder worker
+Description=rne dashboard
 After=network.target
 ConditionPathExists=/mnt/media
 
@@ -7,12 +7,9 @@ ConditionPathExists=/mnt/media
 Type=simple
 User=rip
 Group=mediagroup
-ExecStart=/home/rip/.local/bin/rne-worker
+ExecStart=__RNE_DASHBOARD_BIN__
 Restart=on-failure
 RestartSec=5
-TimeoutStopSec=30
-KillSignal=SIGTERM
-Nice=10
 Environment=HOME=/home/rip
 Environment=RNE_DB=/home/rip/.local/state/rne/jobs.db
 

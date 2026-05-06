@@ -32,6 +32,11 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("pause", help="Pause the global queue")
     sub.add_parser("resume", help="Resume the global queue")
 
+    service_p = sub.add_parser("service", help="Manage systemd unit files")
+    service_sub = service_p.add_subparsers(dest="service_action", required=True)
+    service_sub.add_parser("install", help="Install systemd user services")
+    service_sub.add_parser("uninstall", help="Remove systemd user services")
+
     return parser
 
 
@@ -59,3 +64,9 @@ def main() -> None:
     elif args.command == "resume":
         from rne.cli.manage import run_resume
         run_resume(args)
+    elif args.command == "service":
+        from rne.cli.service import install, uninstall
+        if args.service_action == "install":
+            install()
+        elif args.service_action == "uninstall":
+            uninstall()
