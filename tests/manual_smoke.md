@@ -58,3 +58,111 @@ appears after the next refresh cycle.
 Resize the browser to < 600 px wide (or use DevTools device emulation):
 - ETA column should disappear.
 - Show/episode columns should collapse to a single line (`Initial D · S01E05` style).
+
+---
+
+# Manual Smoke Test — `rne ingest` (CLI)
+
+Run on the `rip` VM (`192.168.50.176`) with a disc in the drive.
+
+## Prerequisites
+
+```bash
+cd ~/rne
+uv pip install -e .
+rne --help   # should list: ingest, ls, edit, cancel, retry, pause, resume
+```
+
+## Step-by-step
+
+### 1. Happy-path TV ingest (Blu-ray)
+
+```
+rne ingest
+```
+
+| Step | Expected |
+|------|----------|
+| Disc detection | `makemkvcon -r --minlength=0 info disc:0` runs; volume name + title table printed |
+| Title table | Columns: #, Source, Duration, Size, Ch, Resolution, FPS, Audio |
+| Title selection | Prompt; enter `2-5` or similar |
+| Content type | `[1] TV episodes / [2] Movie`; enter `1` |
+| Show name | Volume name shown as default; press Enter or edit |
+| Season / first episode | Numbers; episode preview `→ titles will be S01E05, S01E06, …` |
+| Confirm episodes | `Confirm? [Y/n]` — Enter |
+| Staging dir | `Rip to /mnt/media/staging/<show>/ [Y/n]` — Enter |
+| MakeMKV output | `makemkvcon mkv` streams to terminal |
+| Probe | Video/Audio/Subtitle tables; Audio has Ch + Bitrate columns; Subtitles has Duration column |
+| Audio selection | `Audio tracks (1-N, …) [1]:` |
+| Transcode prompt | Fires only for TrueHD/DTS/PCM/FLAC/etc.; not for AC3/EAC3/AAC/MP3/Opus |
+| Subtitle selection | `Subtitle tracks (…) [none]:` |
+| CRF / Preset / Decomb | Defaults in brackets; decomb skipped for progressive sources |
+| Preview | `S01E05  Show - S01E05.mkv  (a=[1:ac3@640,2:copy] s=[] crf=20 preset=slow)` |
+| Queue | Enter → `Queued N job(s) (batch M). Worker will pick them up.` |
+
+Verify:
+
+```bash
+rne ls    # jobs appear as queued
+```
+
+### 2. Movie ingest
+
+- Select one title, choose `[2] Movie`, accept or edit title, queue.
+- Output path: `/mnt/media/staging/<movie>/<movie>.mkv`
+
+### 3. Rip failure handling
+
+If a title fails, the prompt:
+
+```
+Title N failed. Abort the whole ingest, or skip and continue? [a/s]
+```
+
+- `a` → exits 1, no DB rows inserted
+- `s` → continues with remaining titles
+
+### 4. Edit escape hatch at preview
+
+At `[Y/n/edit]:`, enter `edit`. JSON plan opens in `$EDITOR`. Change `quality` to 24,
+save and quit. Preview re-displays with `crf=24`. Enter `y` to queue.
+
+### 5. `rne ls`
+
+```bash
+rne ls               # queued + running + last-24h terminal
+rne ls --all         # full history
+rne ls --status done # filter
+```
+
+### 6. `rne edit <id>`
+
+```bash
+rne edit 1           # opens handbrake_args JSON in $EDITOR
+rne edit <running>   # refuses with error message, exits 1
+```
+
+### 7. `rne cancel` / `rne retry`
+
+```bash
+rne cancel 2   # sets status=cancelled
+rne ls         # verify
+rne retry 2    # requeues, bumps attempt_count
+rne ls         # verify
+```
+
+### 8. `rne pause` / `rne resume`
+
+```bash
+rne pause    # queue_settings.paused=1; worker idles after current job
+rne resume   # queue_settings.paused=0
+```
+
+## What cannot be tested in this dev container
+
+- Disc detection / ripping (`makemkvcon` not installed)
+- Probe of ripped MKV (`ffprobe` not installed)
+- HandBrake encoding (flatpak not present)
+
+All interactive-flow logic, previews, and DB insertion are covered by unit tests
+(`pytest tests/test_cli.py`).
