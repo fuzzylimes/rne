@@ -8,6 +8,7 @@ wheels/
 *.partial
 reference
 Makefile
+*_cache
 
 # Virtual environments
 .venv
