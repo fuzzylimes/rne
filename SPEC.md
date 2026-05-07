@@ -675,7 +675,7 @@ Flask's dev server (`app.run`) is fine for personal LAN use. If it falls over in
 
 ## systemd integration
 
-Two units, both run as `rip:mediagroup`.
+Both units are installed as **user-level** services under `~/.config/systemd/user/` and managed with `systemctl --user`. They run as the invoking user implicitly — no `User=` or `Group=` directive is needed or valid in this context. Group access to `/mnt/media` is provided by the user's `mediagroup` membership and the setgid bit on `/mnt/media` directories, not via a `Group=` directive.
 
 ### `systemd/rne-worker.service`
 
@@ -687,8 +687,6 @@ ConditionPathExists=/mnt/media
 
 [Service]
 Type=simple
-User=rip
-Group=mediagroup
 ExecStart=__RNE_WORKER_BIN__
 Restart=on-failure
 RestartSec=5
@@ -699,7 +697,7 @@ Environment=HOME=/home/rip
 Environment=RNE_DB=/home/rip/.local/state/rne/jobs.db
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target
 ```
 
 `__RNE_WORKER_BIN__` is substituted with the resolved binary path at install time by `rne service install`.
@@ -720,8 +718,6 @@ ConditionPathExists=/mnt/media
 
 [Service]
 Type=simple
-User=rip
-Group=mediagroup
 ExecStart=__RNE_DASHBOARD_BIN__
 Restart=on-failure
 RestartSec=5
@@ -729,7 +725,7 @@ Environment=HOME=/home/rip
 Environment=RNE_DB=/home/rip/.local/state/rne/jobs.db
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target
 ```
 
 `__RNE_DASHBOARD_BIN__` is substituted with the resolved binary path at install time by `rne service install`.

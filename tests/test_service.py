@@ -32,13 +32,17 @@ def test_install_substitutes_placeholders(tmp_path, monkeypatch):
     assert "__RNE_WORKER_BIN__" not in worker_text
     assert "Restart=on-failure" in worker_text
     assert "Nice=10" in worker_text
-    assert "WantedBy=multi-user.target" in worker_text
+    assert "WantedBy=default.target" in worker_text
+    assert "User=" not in worker_text
+    assert "Group=" not in worker_text
 
     dashboard_text = (unit_dir / "rne-dashboard.service").read_text()
     assert f"ExecStart={FAKE_DASHBOARD}" in dashboard_text
     assert "__RNE_DASHBOARD_BIN__" not in dashboard_text
     assert "Restart=on-failure" in dashboard_text
-    assert "WantedBy=multi-user.target" in dashboard_text
+    assert "WantedBy=default.target" in dashboard_text
+    assert "User=" not in dashboard_text
+    assert "Group=" not in dashboard_text
 
 
 def test_install_calls_daemon_reload(tmp_path, monkeypatch):

@@ -5,8 +5,6 @@ ConditionPathExists=/mnt/media
 
 [Service]
 Type=simple
-User=rip
-Group=mediagroup
 ExecStart=__RNE_WORKER_BIN__
 Restart=on-failure
 RestartSec=5
@@ -17,4 +15,4 @@ Environment=HOME=/home/rip
 Environment=RNE_DB=/home/rip/.local/state/rne/jobs.db
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target
