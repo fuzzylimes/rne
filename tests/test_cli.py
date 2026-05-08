@@ -7,14 +7,14 @@ from unittest.mock import patch
 
 import pytest
 
-from rne.cli.ingest import (
+from rne.cli._pipeline import (
     _audio_summary,
-    _build_jobs_plan,
     _describe_mismatch,
     _subtitle_summary,
     build_preview,
     mungefilename,
 )
+from rne.cli.ingest import _build_jobs_plan
 from rne.cli.prompts import prompt_audio_track_decision
 from rne.models import AudioTrack, HandbrakeArgs, SubtitleTrack
 from rne.probe import AudioStream, StreamSummary, SubtitleStream

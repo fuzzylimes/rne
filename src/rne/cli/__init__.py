@@ -10,7 +10,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("ingest", help="Interactive disc ingest flow")
+    sub.add_parser("ingest", help="Rip a disc and queue the rips for encoding.")
+
+    queue_p = sub.add_parser(
+        "queue", help="Queue already-ripped .mkv files for encoding."
+    )
+    queue_p.add_argument(
+        "path",
+        help="Path to a .mkv file or a directory containing .mkv files",
+    )
 
     ls_p = sub.add_parser("ls", help="List jobs")
     ls_p.add_argument("--all", action="store_true", help="Show full history")
@@ -47,6 +55,10 @@ def main() -> None:
         from rne.cli.ingest import run
 
         run()
+    elif args.command == "queue":
+        from rne.cli.queue import run
+
+        run(args)
     elif args.command == "ls":
         from rne.cli.ls import run
 

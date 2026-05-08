@@ -48,7 +48,8 @@ This worked acceptably for DVDs, where rip and encode times were roughly 1:1. Wi
 
 Three independent processes coordinate through a single SQLite database:
 
-- **Ingest CLI** (`rne`) — interactive command the user runs after putting a disc in the drive. Lists titles, prompts for selections and encoding parameters, rips the selected titles, probes the rips, and inserts jobs into the queue. Exits when done.
+- **Ingest CLI** (`rne ingest`) — interactive command the user runs after putting a disc in the drive. Lists titles, prompts for selections and encoding parameters, rips the selected titles, probes the rips, and inserts jobs into the queue. Exits when done.
+- **Queue CLI** (`rne queue <path>`) — second ingestion path for already-ripped files. Accepts a single `.mkv` or a directory of `.mkv` files, runs the same metadata, probe, and encoding-config prompts as `rne ingest`, and inserts jobs into the queue. Source files are never moved or copied; `source_path` on each job points at the user's original location.
 - **Worker daemon** (`rne-worker`) — long-running process under systemd. Pulls the next queued job, runs HandBrakeCLI, writes progress and completion state back to the DB. Single-threaded with respect to encoding.
 - **Dashboard** (`rne-dashboard`) — Flask web app under systemd. Renders the queue as HTML, exposes pause/resume/retry buttons. Auto-refreshes every 30 seconds.
 
@@ -235,6 +236,53 @@ Both sets live in `config.py` as tunable constants. To treat DTS as copy-friendl
 
 The prompt itself only appears when the source codec is *not* in `COPY_FRIENDLY_AUDIO_CODECS`. For DVDs (where AC3 is universal), the user never sees the prompt. For Blu-rays with a TrueHD or DTS-HD track, the prompt appears once per non-friendly track.
 
+## Queue CLI flow (`rne queue`)
+
+`rne queue <path>` is a second ingestion path for files that were ripped outside of `rne ingest` — re-queuing after a failed earlier rip, manually-ripped sources, or anything that bypassed the disc-ingest flow.
+
+### Path resolution
+
+- **Single `.mkv` file**: one-element manifest. Prints "Queueing 1 file."
+- **Directory**: glob `*.mkv` non-recursively, sort alphabetically. Print the numbered file list and a note that order follows alphabetical filename order. If no `.mkv` files are found, print "No .mkv files in {path}, nothing to queue." and exit 0 (not an error).
+- **Missing path**: exit non-zero with a clear error.
+
+### Shared steps
+
+Steps 2–7 below reuse the same helpers as `rne ingest` via `cli/_pipeline.py`.
+
+### Step 1 — Resolve path (queue-specific)
+
+See "Path resolution" above.
+
+### Step 2 — Content classification and naming
+
+Same prompts as `rne ingest` step 3. The default name hint is the directory basename (directory mode) or the filename stem (single-file mode) — often garbage but sometimes useful, same UX as the disc-volume-name default in ingest.
+
+### Step 3 — Create `ingest_batches` row
+
+Label is derived from the metadata with a " (queued)" suffix (e.g., "Full Metal Panic S01 (queued)"). `notes` is set to `f"Queued from {path.absolute()}"` as the paper trail. **No filesystem directory is created** — there is no `_raw/batch-N/` for queued jobs.
+
+### Step 4 — Probe the first file
+
+Same as `rne ingest` step 5.
+
+### Step 5 — Encoding configuration
+
+Same as `rne ingest` step 6 — identical prompts, identical defaults.
+
+### Step 6 — Preview with layout-mismatch detection
+
+Same as `rne ingest` step 7. For "skip-mismatched", skipping a job means it is simply not inserted — the source file is not touched.
+
+### Step 7 — Insert and exit
+
+Insert N jobs with `source_path` pointing at the original file paths. Print:
+
+```
+Queued N job(s) (batch M) from /path/to/source.
+Source files left in place — do not move or delete them until encoding completes.
+```
+
 ## Project layout
 
 ```
@@ -256,7 +304,9 @@ rne/
     │   └── rne-dashboard.service
     ├── cli/
     │   ├── __init__.py      # argparse dispatcher
-    │   ├── ingest.py        # the disc-to-queue interactive flow
+    │   ├── _pipeline.py     # shared helpers (probe display, encoding config, preview, DB ops)
+    │   ├── ingest.py        # disc-to-queue interactive flow
+    │   ├── queue.py         # queue already-ripped .mkv files
     │   ├── ls.py
     │   ├── edit.py
     │   ├── manage.py        # cancel, retry, pause, resume
@@ -281,7 +331,8 @@ rne/
 - **`config.py`** — flat module of constants. Things like `DB_PATH`, `STAGING_ROOT`, `MEDIA_ROOT`, default minlength, default ffprobe timeout, the flatpak HandBrake invocation prefix, `COPY_FRIENDLY_AUDIO_CODECS`, `AC3_BITRATE_BY_CHANNELS`. Override via env vars where appropriate. Not pydantic, not yaml. When the project grows past 10 settings, revisit.
 - **`db.py`** — owns everything sqlite. Schema as a `SCHEMA_SQL` constant, `init_db()` that runs it idempotently, `connect()` that applies pragmas. Thin functions like `claim_next_job()`, `update_progress(...)`, `mark_done(...)`. No ORM. `sqlite3.Row` row factory. One-off queries can stay inline at the call site.
 - **`models.py`** — dataclasses mirroring the columns, with `from_row(row)` classmethods. `JobStatus` is a `StrEnum`. `HandbrakeArgs` and the nested `AudioTrack` dataclass with `to_json()` / `from_json()`.
-- **`handbrake.py`** — pure. Takes a `HandbrakeArgs` and source path, returns `["HandBrakeCLI", "-i", ...]`. No subprocess, no DB, no I/O. The flatpak prefix from `config.py` is prepended here. Validates `AudioTrack` entries: bitrate required when codec != "copy", rejected when codec == "copy".
+- **`handbrake.py`** — pure. Takes a `HandbrakeArgs` and source path, returns `["HandBrakeCLI", "-i", ...]`. No subprocess, no DB, no I/O. The flatpak prefix from `config.py` is prepended here. Validates `AudioTrack` entries: bitrate required when codec != "copy", rejected when codec == "copy". `source_path` may point outside `/mnt/media/staging/` for jobs created via `rne queue` — this is valid and expected.
+- **`cli/_pipeline.py`** — shared interactive pipeline helpers used by both `ingest.py` and `queue.py`: probe-table display, `build_preview`, mismatch detection, `prompt_metadata`, `prompt_encoding_config`, `preview_and_confirm`, `create_batch_row`, `insert_jobs`, and the `$EDITOR` round-trip.
 - **`probe.py`** — port of `mkvprobe-format.py`. `summarize(mkv_path) → StreamSummary`. The `AudioStream` summary includes `codec`, `channels`, `bitrate`, `language`, `title`, `default`, `forced`. The table-printing logic moves into `cli/ingest.py`.
 - **`makemkv.py`** — port of `mkvrip`'s parser (the `parse_info`, `summarize`, `parse_index_spec` functions). The interactive prompting moves into `cli/ingest.py`.
 - **`worker/runner.py`** — `subprocess.Popen` of HandBrake, parses progress, captures stderr ring buffer, handles `.partial` rename.
@@ -320,7 +371,9 @@ The whole thing fits in a venv with maybe 3 MB of installed packages.
 
 ## Storage layout
 
-Raw files are isolated per ingest batch to prevent cross-batch clobbering when disc 2 is ingested while disc 1's encodes are still in the queue:
+Raw files from `rne ingest` are isolated per batch to prevent cross-batch clobbering when disc 2 is ingested while disc 1's encodes are still in the queue. Jobs created via `rne queue` do NOT populate the `_raw/batch-N/` structure — source files live wherever the user pointed `rne queue` at, and `ingest_batches.notes` records the original location for traceability. `source_path` on queued jobs may therefore point outside `/mnt/media/staging/`; this is intentional. If the user moves the source file mid-encode, the worker fails cleanly (HandBrake exits non-zero on missing input) and marks the job `failed` — acceptable for a re-queue tool aimed at files the user already controls.
+
+Raw files from disc ingest are isolated per batch to prevent cross-batch clobbering:
 
 ```
 /mnt/media/staging/Initial D/

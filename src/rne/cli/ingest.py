@@ -1,193 +1,37 @@
 from __future__ import annotations
 
-import json
-import os
 import pathlib
-import re
 import subprocess
 import sys
-import tempfile
 
-from rne import config, db, makemkv, probe
+from rne import config, db, makemkv
+from rne.cli._pipeline import (
+    create_batch_row,
+    insert_jobs,
+    preview_and_confirm,
+    probe_and_display,
+    prompt_encoding_config,
+    prompt_metadata,
+)
 from rne.cli import prompts
-from rne.models import AudioTrack, HandbrakeArgs, SubtitleTrack
-
-# Characters stripped from user-supplied path components, mirroring .abcde.conf:
-#   sed 's/[:><|*/\"'\''?[:cntrl:]]//g'
-_MUNGE_RE = re.compile(r"""[:<>|*/\\"'?]|[\x00-\x1f\x7f]""")
-
-
-def mungefilename(name: str) -> str:
-    """Strip characters that are unsafe in filesystem paths."""
-    return _MUNGE_RE.sub("", name)
+from rne.models import HandbrakeArgs
 
 
 # ---------------------------------------------------------------------------
-# Table display
+# Ingest-specific table display (uses makemkv.summarize)
 # ---------------------------------------------------------------------------
-
-
-def _print_table(
-    cols: list[str],
-    rows: list[dict],
-    right_align: set[str] | None = None,
-) -> None:
-    ra = right_align or set()
-    widths = {
-        c: max(len(c), max((len(str(r.get(c, ""))) for r in rows), default=0))
-        for c in cols
-    }
-    header = "  ".join(
-        f"{c:>{widths[c]}}" if c in ra else f"{c:<{widths[c]}}" for c in cols
-    )
-    print(header)
-    print("-" * len(header))
-    for row in rows:
-        print("  ".join(
-            f"{str(row.get(c, '')):>{widths[c]}}" if c in ra
-            else f"{str(row.get(c, '')):<{widths[c]}}"
-            for c in cols
-        ))
 
 
 def _print_title_table(titles: dict) -> None:
+    from rne.cli._pipeline import _print_table
     cols = ["#", "Source", "Duration", "Size",
             "Ch", "Resolution", "FPS", "Audio"]
     rows = [makemkv.summarize(tid, titles[tid]) for tid in sorted(titles)]
     _print_table(cols, rows)
 
 
-def _print_stream_tables(summary: probe.StreamSummary) -> None:
-    if summary.video:
-        print("\nVideo:")
-        vcols = ["#", "Codec", "Resolution", "FPS",
-                 "Field", "Lang", "Def", "Forced"]
-        vrows = [
-            {
-                "#": i,
-                "Codec": v.codec,
-                "Resolution": v.resolution,
-                "FPS": v.fps,
-                "Field": v.field_order,
-                "Lang": v.lang,
-                "Def": "Y" if v.default else "",
-                "Forced": "Y" if v.forced else "",
-            }
-            for i, v in enumerate(summary.video, 1)
-        ]
-        _print_table(vcols, vrows)
-
-    if summary.audio:
-        print("\nAudio:")
-        acols = ["#", "Codec", "Ch", "Bitrate",
-                 "Lang", "Title", "Def", "Forced"]
-        arows = [
-            {
-                "#": i,
-                "Codec": a.codec,
-                "Ch": str(a.channels) if a.channels is not None else "",
-                "Bitrate": f"{a.bitrate // 1000}k" if a.bitrate else "",
-                "Lang": a.lang,
-                "Title": a.title,
-                "Def": "Y" if a.default else "",
-                "Forced": "Y" if a.forced else "",
-            }
-            for i, a in enumerate(summary.audio, 1)
-        ]
-        _print_table(acols, arows)
-
-    if summary.subtitle:
-        print("\nSubtitles:")
-        scols = ["#", "Codec", "Lang", "Title", "Def", "Forced", "Frames"]
-        srows = [
-            {
-                "#": i,
-                "Codec": s.codec,
-                "Lang": s.lang,
-                "Title": s.title,
-                "Def": "Y" if s.default else "",
-                "Forced": "Y" if s.forced else "",
-                "Frames": str(s.frames) if s.frames is not None else "—",
-            }
-            for i, s in enumerate(summary.subtitle, 1)
-        ]
-        _print_table(scols, srows, right_align={"Frames"})
-
-
 # ---------------------------------------------------------------------------
-# Preview (pure — tested directly)
-# ---------------------------------------------------------------------------
-
-
-def _audio_summary(audio_tracks: list[AudioTrack]) -> str:
-    parts = []
-    for t in audio_tracks:
-        if t.codec == "copy":
-            parts.append(f"{t.track}:copy")
-        else:
-            parts.append(f"{t.track}:{t.codec}@{t.bitrate}")
-    return "[" + ",".join(parts) + "]"
-
-
-def _subtitle_summary(subtitle_tracks: list[SubtitleTrack]) -> str:
-    parts = []
-    for t in subtitle_tracks:
-        parts.append(f"{t.track}*" if t.default else str(t.track))
-    return "[" + ",".join(parts) + "]"
-
-
-def build_preview(jobs_plan: list[dict]) -> str:
-    """Return preview text for a list of job plan dicts.
-
-    Each dict must have: label, output_path, handbrake_args (HandbrakeArgs).
-    Optional key layout_warning=True adds a ⚠ marker to that line.
-    Pure function — no I/O.
-    """
-    lines = ["Preview:"]
-    for job in jobs_plan:
-        hb: HandbrakeArgs = job["handbrake_args"]
-        out_name = pathlib.Path(job["output_path"]).name
-        audio_str = _audio_summary(hb.audio_tracks)
-        sub_str = _subtitle_summary(hb.subtitle_tracks)
-        details = f"(a={audio_str} s={sub_str} crf={hb.quality} preset={hb.preset}"
-        if hb.tune is not None:
-            details += f" tune={hb.tune}"
-        details += ")"
-        warning = "  ⚠ different track layout" if job.get("layout_warning") else ""
-        lines.append(f"  {job['label']:<8}  {out_name}  {details}{warning}")
-    return "\n".join(lines)
-
-
-# ---------------------------------------------------------------------------
-# Mismatch description (pure — tested directly)
-# ---------------------------------------------------------------------------
-
-
-def _describe_mismatch(
-    ref: probe.StreamSummary,
-    other: probe.StreamSummary,
-    label: str,
-) -> str:
-    """Human-readable description of how other's layout differs from ref."""
-    parts: list[str] = []
-    if len(other.audio) != len(ref.audio):
-        parts.append(
-            f"audio track count {len(other.audio)} vs reference {len(ref.audio)}"
-        )
-    else:
-        for i, (ra, oa) in enumerate(zip(ref.audio, other.audio), 1):
-            if ra.codec != oa.codec:
-                parts.append(f"audio track {i} is {oa.codec} instead of {ra.codec}")
-    if len(other.subtitle) != len(ref.subtitle):
-        parts.append(
-            f"subtitle track count {len(other.subtitle)} vs reference {len(ref.subtitle)}"
-        )
-    desc = "; ".join(parts) if parts else "unknown difference"
-    return f"{label} differs: {desc}."
-
-
-# ---------------------------------------------------------------------------
-# Job plan construction
+# Job plan construction (ingest-specific: uses rip_manifest with title_idx)
 # ---------------------------------------------------------------------------
 
 
@@ -245,118 +89,6 @@ def _build_jobs_plan(
 
 
 # ---------------------------------------------------------------------------
-# Plan serialisation for $EDITOR round-trip
-# ---------------------------------------------------------------------------
-
-
-def _plan_to_json(jobs_plan: list[dict]) -> str:
-    serialisable = []
-    for job in jobs_plan:
-        hb: HandbrakeArgs = job["handbrake_args"]
-        d = dict(job)
-        d["handbrake_args"] = json.loads(hb.to_json())
-        serialisable.append(d)
-    return json.dumps(serialisable, indent=2)
-
-
-def _plan_from_json(text: str) -> list[dict]:
-    """Parse and validate an edited plan. Raises ValueError on any problem."""
-    data = json.loads(text)
-    if not isinstance(data, list):
-        raise ValueError("plan must be a JSON array")
-    jobs = []
-    for i, item in enumerate(data):
-        hb_raw = item.get("handbrake_args")
-        if hb_raw is None:
-            raise ValueError(f"job {i}: missing handbrake_args")
-        hb = HandbrakeArgs.from_json(json.dumps(hb_raw))
-        job = dict(item)
-        job["handbrake_args"] = hb
-        jobs.append(job)
-    return jobs
-
-
-def _edit_plan(jobs_plan: list[dict]) -> list[dict]:
-    """Open jobs_plan in $EDITOR and return the validated replacement."""
-    editor = os.environ.get("EDITOR", "vi")
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".json", delete=False, prefix="rne_plan_"
-    ) as f:
-        f.write(_plan_to_json(jobs_plan))
-        tmp = f.name
-
-    try:
-        while True:
-            subprocess.run([editor, tmp], check=False)
-            try:
-                with open(tmp) as f:
-                    return _plan_from_json(f.read())
-            except Exception as exc:
-                print(f"Validation error: {exc}", file=sys.stderr)
-                raw = input("Re-open editor? [Y/n]: ").strip().lower()
-                if raw not in ("", "y"):
-                    print("Edit cancelled; keeping original plan.", file=sys.stderr)
-                    return jobs_plan
-    finally:
-        os.unlink(tmp)
-
-
-# ---------------------------------------------------------------------------
-# DB insertion
-# ---------------------------------------------------------------------------
-
-
-def _create_ingest_batch(
-    conn,
-    *,
-    is_tv: bool,
-    show: str | None,
-    movie: str | None,
-    season: int | None,
-    notes: str,
-) -> int:
-    """Create the ingest_batches row and return its id.
-
-    Called before ripping so the batch id can be used in the raw dir path.
-    """
-    label = f"{show} S{season:02d}" if is_tv else str(movie)
-    cur = conn.execute(
-        "INSERT INTO ingest_batches (label, show, movie, notes) VALUES (?, ?, ?, ?)",
-        (label, show, movie, notes),
-    )
-    conn.commit()
-    return cur.lastrowid
-
-
-def _insert_jobs(conn, batch_id: int, jobs_plan: list[dict]) -> None:
-    """Insert job rows for an already-created ingest batch."""
-    for job in jobs_plan:
-        hb: HandbrakeArgs = job["handbrake_args"]
-        # Ensure output directory exists before the worker runs.
-        pathlib.Path(job["output_path"]).parent.mkdir(
-            parents=True, exist_ok=True)
-        conn.execute(
-            """
-            INSERT INTO jobs
-              (show, season, episode, movie, source_path, output_path,
-               handbrake_args, ingest_batch_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                job["show"],
-                job["season"],
-                job["episode"],
-                job["movie"],
-                job["source_path"],
-                job["output_path"],
-                hb.to_json(),
-                batch_id,
-            ),
-        )
-    conn.commit()
-
-
-# ---------------------------------------------------------------------------
 # Main ingest flow
 # ---------------------------------------------------------------------------
 
@@ -400,55 +132,13 @@ def run() -> None:
         print("No titles selected. Aborted.", file=sys.stderr)
         sys.exit(1)
 
-    # ---- Step 3: content classification ----------------------------------------
+    # ---- Step 3: content classification and naming -----------------------------
     print()
-    print("What's on this disc?")
-    print("  [1] TV episodes")
-    print("  [2] Movie")
-    while True:
-        choice = input("> ").strip()
-        if choice in ("1", "2"):
-            break
-        print("Please enter 1 or 2.", file=sys.stderr)
+    is_tv, show, season, first_ep, movie = prompt_metadata(volume_name, len(selected_indexes))
 
-    is_tv = choice == "1"
-
+    episodes: list[int] | None = None
     if is_tv:
-        show = mungefilename(prompts.prompt_with_default("Show", volume_name))
-
-        while True:
-            try:
-                season = int(input("Season: ").strip())
-                if season > 0:
-                    break
-            except ValueError:
-                pass
-            print("Please enter a positive integer.", file=sys.stderr)
-
-        while True:
-            try:
-                first_ep = int(input("First episode number: ").strip())
-                if first_ep > 0:
-                    break
-            except ValueError:
-                pass
-            print("Please enter a positive integer.", file=sys.stderr)
-
-        episodes = list(range(first_ep, first_ep + len(selected_indexes)))
-        ep_preview = ", ".join(f"S{season:02d}E{ep:02d}" for ep in episodes)
-        print(f"  → titles will be {ep_preview}")
-
-        if not prompts.prompt_yes_no("Confirm?"):
-            print("Aborted.")
-            sys.exit(0)
-
-        movie = None
-    else:
-        show = None
-        season = None
-        episodes = None
-        movie = mungefilename(
-            prompts.prompt_with_default("Movie title", volume_name))
+        episodes = list(range(first_ep, first_ep + len(selected_indexes)))  # type: ignore[arg-type]
 
     # ---- Step 4: staging dir confirm, create batch row, rip per title ----------
     #
@@ -462,7 +152,7 @@ def run() -> None:
 
     conn = db.connect()
     db.init_db(conn)
-    batch_id = _create_ingest_batch(
+    batch_id = create_batch_row(
         conn,
         is_tv=is_tv,
         show=show,
@@ -513,148 +203,11 @@ def run() -> None:
 
     # ---- Step 5: probe first ripped file ---------------------------------------
     first_source = rip_manifest[0][1]
-    print(f"\nProbing {first_source.name} ...")
-
-    try:
-        probe_data = probe.probe(str(first_source))
-        stream_summary = probe.summarize(probe_data)
-    except Exception as exc:
-        print(f"Probe failed: {exc}", file=sys.stderr)
-        sys.exit(1)
-
-    _print_stream_tables(stream_summary)
+    stream_summary = probe_and_display(first_source)
 
     # ---- Step 6: encoding config -----------------------------------------------
     print()
-
-    # a. Audio track selection
-    num_audio = len(stream_summary.audio)
-    if num_audio == 0:
-        print("Warning: no audio tracks found in probe.", file=sys.stderr)
-        audio_track_indexes: list[int] = []
-    else:
-        valid_audio = list(range(1, num_audio + 1))
-        audio_range = f"1-{num_audio}" if num_audio > 1 else "1"
-        while True:
-            raw_audio = input(
-                f"Audio tracks ({audio_range}, comma-separated, 'all') [1]: "
-            ).strip()
-            if not raw_audio:
-                audio_track_indexes = [1]
-                break
-            parsed_audio = makemkv.parse_index_spec(raw_audio)
-            if parsed_audio is None:
-                audio_track_indexes = valid_audio
-                break
-            invalid_a = [i for i in parsed_audio if i not in valid_audio]
-            if invalid_a:
-                print(
-                    f"Invalid audio track indexes: {invalid_a}. Valid: {valid_audio}",
-                    file=sys.stderr,
-                )
-                continue
-            audio_track_indexes = parsed_audio
-            break
-
-    # b. Per-track transcode decisions
-    audio_tracks: list[AudioTrack] = []
-    for track_num in audio_track_indexes:
-        stream = stream_summary.audio[track_num - 1]
-        audio_tracks.append(
-            prompts.prompt_audio_track_decision(stream, track_num))
-
-    if not audio_tracks:
-        audio_tracks = [AudioTrack(track=1)]
-
-    # c. Subtitle track selection
-    num_subs = len(stream_summary.subtitle)
-    subtitle_track_indexes: list[int] = []
-    if num_subs > 0:
-        sub_range = f"1-{num_subs}" if num_subs > 1 else "1"
-        raw_sub = input(
-            f"Subtitle tracks ({sub_range}, comma-separated, 'none') [none]: "
-        ).strip()
-        if raw_sub and raw_sub.lower() != "none":
-            parsed_sub = makemkv.parse_index_spec(raw_sub)
-            if parsed_sub is None:
-                subtitle_track_indexes = list(range(1, num_subs + 1))
-            else:
-                subtitle_track_indexes = parsed_sub
-
-    # c2. Default subtitle selection
-    subtitle_tracks: list[SubtitleTrack] = []
-    if subtitle_track_indexes:
-        subtitle_tracks = [SubtitleTrack(track=n) for n in subtitle_track_indexes]
-        n_sel = len(subtitle_track_indexes)
-        if n_sel == 1:
-            def_prompt = "Default subtitle track? (1 or 0 for none) [0]: "
-        else:
-            def_prompt = (
-                f"Default subtitle track? (1-{n_sel}, or 0 for none) [0]: "
-            )
-        while True:
-            raw_def = input(def_prompt).strip()
-            if not raw_def or raw_def == "0":
-                break
-            try:
-                sel = int(raw_def)
-                if 1 <= sel <= n_sel:
-                    source_track = subtitle_track_indexes[sel - 1]
-                    subtitle_tracks[sel - 1] = SubtitleTrack(
-                        track=source_track, default=True
-                    )
-                    if source_track != sel:
-                        print(f"Marked source track {source_track} as default.")
-                    break
-                print(
-                    f"Please enter a number between 0 and {n_sel}.",
-                    file=sys.stderr,
-                )
-            except ValueError:
-                print("Please enter a number.", file=sys.stderr)
-
-    # d. CRF, preset, decomb
-    crf_str = prompts.prompt_with_default(
-        "Quality (CRF)", str(config.DEFAULT_QUALITY))
-    try:
-        crf = int(crf_str)
-    except ValueError:
-        print(
-            f"Invalid CRF {crf_str!r}, using {config.DEFAULT_QUALITY}.",
-            file=sys.stderr,
-        )
-        crf = config.DEFAULT_QUALITY
-
-    preset = prompts.prompt_with_default("Preset", config.DEFAULT_PRESET)
-
-    tune: str | None = config.DEFAULT_TUNE
-    if prompts.prompt_yes_no("Animation source?", default=False):
-        tune = "animation"
-
-    interlaced = any(
-        v.field_order not in ("progressive", "", "unknown")
-        for v in stream_summary.video
-    )
-    decomb = False
-    if interlaced:
-        field_label = (
-            stream_summary.video[0].field_order
-            if stream_summary.video
-            else "interlaced"
-        )
-        decomb = prompts.prompt_yes_no(
-            f"Decomb? Source is {field_label}.", default=False
-        )
-
-    hb_args = HandbrakeArgs(
-        encoder=config.DEFAULT_ENCODER,
-        quality=crf,
-        preset=preset,
-        audio_tracks=audio_tracks,
-        subtitle_tracks=subtitle_tracks,
-        decomb=decomb,
-        tune=tune,
-    )
+    hb_args = prompt_encoding_config(stream_summary)
 
     # ---- Step 7: preview, mismatch detection, edit, confirm --------------------
     jobs_plan = _build_jobs_plan(
@@ -668,59 +221,11 @@ def run() -> None:
         hb_args=hb_args,
     )
 
-    # Probe titles 2..N and flag any that differ from title 1's layout.
-    mismatch_details: list[str] = []
-    for pos, (_, file_path) in enumerate(rip_manifest[1:], 1):
-        try:
-            other_summary = probe.summarize(probe.probe(str(file_path)))
-            if not probe.layouts_match(stream_summary, other_summary):
-                jobs_plan[pos]["layout_warning"] = True
-                mismatch_details.append(
-                    _describe_mismatch(stream_summary, other_summary, jobs_plan[pos]["label"])
-                )
-        except Exception:
-            pass
-
-    while True:
-        n = len(jobs_plan)
-        preview = build_preview(jobs_plan)
-
-        if mismatch_details:
-            mismatch_text = "\n".join(mismatch_details)
-            print(f"{preview}\n\n{mismatch_text}")
-            resp = input(
-                f"\nQueue these {n} job(s)? [Y/n/edit/skip-mismatched]: "
-            ).strip().lower()
-            if resp in ("", "y", "yes"):
-                break
-            if resp in ("n", "no"):
-                print("Aborted.")
-                sys.exit(0)
-            if resp in ("e", "edit"):
-                jobs_plan = _edit_plan(jobs_plan)
-                continue
-            if resp in ("skip-mismatched", "skip"):
-                jobs_plan = [j for j in jobs_plan if not j.get("layout_warning")]
-                if not jobs_plan:
-                    print("No matching titles to queue. Aborting.", file=sys.stderr)
-                    sys.exit(1)
-                mismatch_details = []
-                break
-            print("Please enter Y, n, edit, or skip-mismatched.", file=sys.stderr)
-        else:
-            decision = prompts.confirm_or_edit(
-                preview + f"\n\nQueue these {n} job(s)?"
-            )
-            if decision == "yes":
-                break
-            if decision == "no":
-                print("Aborted.")
-                sys.exit(0)
-            # edit
-            jobs_plan = _edit_plan(jobs_plan)
+    remaining_paths = [fp for _, fp in rip_manifest[1:]]
+    jobs_plan = preview_and_confirm(jobs_plan, stream_summary, remaining_paths)
 
     # ---- Step 8: insert and exit -----------------------------------------------
-    _insert_jobs(conn, batch_id, jobs_plan)
+    insert_jobs(conn, batch_id, jobs_plan)
 
     print(
         f"\nQueued {len(jobs_plan)} job(s) (batch {batch_id}). "

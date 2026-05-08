@@ -167,6 +167,30 @@ systemctl --user restart rne-worker rne-dashboard
 
 ---
 
+## h. Queueing externally-ripped files
+
+Use `rne queue` to feed already-ripped `.mkv` files into the same encoding flow as `rne ingest`. Common use cases: re-queueing files from a failed earlier rip, manually-ripped sources, or anything that bypassed the disc-ingest flow.
+
+**Single file:**
+
+```bash
+rne queue /tmp/movie-rip.mkv
+```
+
+**Directory of files** (globbed non-recursively, sorted alphabetically):
+
+```bash
+rne queue ~/old-rips/full-metal-panic-disc-2/
+```
+
+The command resolves the path, shows the file list (for directories), then runs the same metadata, probe, and encoding-config prompts as `rne ingest`.
+
+**Important:** source files are never moved or copied. `rne queue` only reads the files; the encoder reads them later from their original location. Do not move or delete the source files until all encoding jobs for that batch have completed (`rne ls` shows their status).
+
+If a directory contains no `.mkv` files, `rne queue` prints a friendly message and exits without error — globbing an empty directory is treated as a no-op.
+
+---
+
 ## g. Uninstall
 
 ```bash
