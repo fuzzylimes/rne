@@ -701,7 +701,7 @@ def setup_signal_handlers():
 ### Stack
 
 - **Flask**, server-rendered Jinja templates, no JS framework, no fetch, no JSON API.
-- **Pico CSS** via CDN — classless, ~10 KB, responsive, dark mode automatic.
+- **Pico CSS** via CDN — classless, ~10 KB, responsive, dark mode forced (`data-theme="dark"`).
 - **Auto-refresh** via `<meta http-equiv="refresh" content="30">`. The page reloads every 30 seconds, picks up new state, re-renders. Crude and perfect for a single-user LAN dashboard.
 
 ### Endpoints
@@ -755,12 +755,7 @@ Worker heartbeat indicator: green dot if `last_seen` within 30s, amber 30–90s,
 
 ### Mobile
 
-Pico's defaults handle most of it. Two practical adjustments at narrow widths (`@media (max-width: 600px)`):
-
-1. Hide the ETA column. Progress percentage is the headline number; ETA is detail.
-2. Episode/show display becomes one line (`Initial D · S01E05`) instead of two columns.
-
-Eight or so lines of CSS total. No mobile-specific templates.
+Pico's defaults handle narrow viewports. No mobile-specific overrides — the table layout reflows naturally and all columns remain visible at small widths.
 
 ### Auth
 

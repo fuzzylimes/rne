@@ -3,20 +3,23 @@
 {% block content %}
 
 {# ── Header ── #}
-<header style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:.5rem; margin-bottom:1rem;">
+<header
+  style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:.5rem; margin-bottom:1rem;">
   <strong style="font-size:1.2rem;">rne</strong>
-  <div style="display:flex; align-items:center; gap:.75rem; flex-wrap:wrap;">
+  <div style="display:flex; flex-direction:column; align-items:flex-end; gap:.35rem;">
     <span>
       <span class="dot dot-{{ worker.indicator }}"></span>
       Worker: {{ worker.state }}
       {%- if worker.ago is not none %} &bull; {{ worker.ago }}s ago{% endif %}
     </span>
-    <form class="inline" action="/queue/pause" method="post">
-      <button type="submit" style="margin:0; padding:.25rem .6rem;">Pause queue</button>
-    </form>
-    <form class="inline" action="/queue/resume" method="post">
-      <button type="submit" style="margin:0; padding:.25rem .6rem;">Resume queue</button>
-    </form>
+    <div style="display:flex; gap:.5rem;">
+      <form class="inline" action="/queue/pause" method="post">
+        <button type="submit" style="padding:.25rem .6rem;">Pause queue</button>
+      </form>
+      <form class="inline" action="/queue/resume" method="post">
+        <button type="submit" style="padding:.25rem .6rem;">Resume queue</button>
+      </form>
+    </div>
   </div>
 </header>
 
@@ -31,22 +34,23 @@
   <table>
     <tbody>
       <tr>
+        <td class="pill-col"><span class="status-pill pill-running">Running</span></td>
         <td>
           <span class="col-ep">
-            {%- if running.show -%}S{{ '%02d'|format(running.season) }}E{{ '%02d'|format(running.episode) }}{%- else -%}movie{%- endif -%}
+            {%- if running.show -%}S{{ '%02d'|format(running.season) }}E{{ '%02d'|format(running.episode) }}{%- else
+            -%}Movie{%- endif -%}
           </span>
           &nbsp;
           <span class="col-show">{{ running.show or running.movie }}</span>
-        </td>
-        <td>
-          {%- if running.progress_pct is not none -%}
-          <span class="progress-bar"><span class="progress-bar-fill" style="width:{{ running.progress_pct|int }}%"></span></span>
-          {{ '%.1f'|format(running.progress_pct) }}%
-          {%- if running.progress_fps is not none %} &bull; {{ '%.1f'|format(running.progress_fps) }} fps{%- endif %}
-          {%- endif -%}
-        </td>
-        <td class="col-eta">
-          {%- if running.eta_fmt %}ETA {{ running.eta_fmt }}{%- endif -%}
+          {%- if running.progress_pct is not none %}
+          <div class="progress-row">
+            <span class="progress-bar"><span class="progress-bar-fill"
+                style="width:{{ running.progress_pct|int }}%"></span></span>
+            &nbsp;{{ '%.1f'|format(running.progress_pct) }}%
+            {%- if running.progress_fps is not none %} &bull; {{ '%.1f'|format(running.progress_fps) }} fps{%- endif %}
+            {%- if running.eta_fmt %} &bull; ETA {{ running.eta_fmt }}{%- endif %}
+          </div>
+          {%- endif %}
         </td>
       </tr>
     </tbody>
@@ -62,24 +66,25 @@
     <tbody>
       {% for job in queued %}
       <tr>
+        <td class="pill-col">
+          <span class="status-pill pill-{{ job.status }}">{{ job.status|capitalize }}</span>
+        </td>
         <td>
           <span class="col-ep">
-            {%- if job.show -%}S{{ '%02d'|format(job.season) }}E{{ '%02d'|format(job.episode) }}{%- else -%}movie{%- endif -%}
+            {%- if job.show -%}S{{ '%02d'|format(job.season) }}E{{ '%02d'|format(job.episode) }}{%- else -%}Movie{%-
+            endif -%}
           </span>
           &nbsp;
           <span class="col-show">{{ job.show or job.movie }}</span>
         </td>
-        <td>
-          <small>{{ job.status }}</small>
-        </td>
-        <td>
+        <td class="btn-col">
           {% if job.status == 'queued' %}
           <form class="inline" action="/jobs/{{ job.id }}/pause" method="post">
-            <button type="submit" style="margin:0; padding:.2rem .5rem;">Pause</button>
+            <button type="submit" style="padding:.2rem .5rem;">Pause</button>
           </form>
           {% elif job.status == 'paused' %}
           <form class="inline" action="/jobs/{{ job.id }}/resume" method="post">
-            <button type="submit" style="margin:0; padding:.2rem .5rem;">Resume</button>
+            <button type="submit" style="padding:.2rem .5rem;">Resume</button>
           </form>
           {% endif %}
         </td>
@@ -100,26 +105,31 @@
     <tbody>
       {% for job in recent %}
       <tr>
+        <td class="pill-col">
+          <span class="status-pill pill-{{ job.status }}">{{ job.status|capitalize }}</span>
+        </td>
         <td>
           <span class="col-ep">
-            {%- if job.show -%}S{{ '%02d'|format(job.season) }}E{{ '%02d'|format(job.episode) }}{%- else -%}movie{%- endif -%}
+            {%- if job.show -%}S{{ '%02d'|format(job.season) }}E{{ '%02d'|format(job.episode) }}{%- else -%}Movie{%-
+            endif -%}
           </span>
           &nbsp;
           <span class="col-show">{{ job.show or job.movie }}</span>
         </td>
-        <td><small>{{ job.status }}</small></td>
         <td class="col-eta">
-          {%- if job.finished_at %}{{ job.finished_at }}{%- endif -%}
+          {%- if job.finished_at -%}
+          <span class="js-utc-time" data-utc="{{ job.finished_at }}">{{ job.finished_at }}</span>
+          {%- endif -%}
         </td>
-        <td>
+        <td class="btn-col">
           {% if job.status != 'done' %}
           <form class="inline" action="/jobs/{{ job.id }}/retry" method="post">
-            <button type="submit" style="margin:0; padding:.2rem .5rem;">Retry</button>
+            <button type="submit" style="padding:.2rem .5rem;">Retry</button>
           </form>
           {% endif %}
           {% if job.status == 'done' %}
           <form class="inline" action="/jobs/{{ job.id }}/retry" method="post">
-            <button type="submit" style="margin:0; padding:.2rem .5rem;" class="secondary">Re-encode</button>
+            <button type="submit" style="padding:.2rem .5rem;" class="secondary">Re-encode</button>
           </form>
           {% endif %}
           {%- if job.error_message %}

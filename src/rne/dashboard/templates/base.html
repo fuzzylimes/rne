@@ -1,31 +1,155 @@
 <!doctype html>
-<html lang="en" data-theme="auto">
+<html lang="en" data-theme="dark">
+
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="refresh" content="30">
   <title>{% block title %}rne{% endblock %}</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.cyan.min.css">
   <style>
-    .dot { display: inline-block; width: .7em; height: .7em; border-radius: 50%; margin-right: .35em; }
-    .dot-green  { background: #22c55e; }
-    .dot-amber  { background: #f59e0b; }
-    .dot-red    { background: #ef4444; }
-    .dot-offline{ background: #6b7280; }
-    .progress-bar { background: var(--pico-muted-border-color); border-radius: 4px; height: 8px; overflow: hidden; display: inline-block; width: 120px; vertical-align: middle; }
-    .progress-bar-fill { height: 100%; background: var(--pico-primary); }
-    .banner-paused { background: var(--pico-del-color); color: #fff; text-align: center; padding: .4rem; font-weight: bold; }
-    form.inline { display: inline; }
-    @media (max-width: 600px) {
-      .col-eta  { display: none; }
-      .col-show, .col-ep { display: block; }
-      .col-show::after { content: " · "; }
+    .dot {
+      display: inline-block;
+      width: .7em;
+      height: .7em;
+      border-radius: 50%;
+      margin-right: .35em;
     }
+
+    .dot-green {
+      background: #22c55e;
+    }
+
+    .dot-amber {
+      background: #f59e0b;
+    }
+
+    .dot-red {
+      background: #ef4444;
+    }
+
+    .dot-offline {
+      background: #6b7280;
+    }
+
+    .progress-bar {
+      background: var(--pico-muted-border-color);
+      border-radius: 4px;
+      height: 8px;
+      overflow: hidden;
+      display: inline-block;
+      width: 120px;
+      vertical-align: middle;
+    }
+
+    .progress-bar-fill {
+      display: block;
+      height: 100%;
+      background: #22c55e;
+    }
+
+    .banner-paused {
+      background: var(--pico-del-color);
+      color: #fff;
+      text-align: center;
+      padding: .4rem;
+      font-weight: bold;
+      border-radius: 4px;
+      margin-bottom: 1rem;
+    }
+
+    form.inline {
+      display: inline;
+    }
+
+    .status-pill {
+      display: inline-block;
+      padding: .15em .6em;
+      border-radius: 999px;
+      font-size: .75rem;
+      font-weight: 600;
+      letter-spacing: .02em;
+      white-space: nowrap;
+    }
+
+    .pill-queued {
+      background: #1e3a8a;
+      color: #bfdbfe;
+    }
+
+    .pill-paused {
+      background: #78350f;
+      color: #fde68a;
+    }
+
+    .pill-running {
+      background: #065f46;
+      color: #a7f3d0;
+    }
+
+    .pill-done {
+      background: #14532d;
+      color: #86efac;
+    }
+
+    .pill-failed {
+      background: #7f1d1d;
+      color: #fca5a5;
+    }
+
+    .pill-interrupted {
+      background: #7c2d12;
+      color: #fdba74;
+    }
+
+    .pill-cancelled {
+      background: #1f2937;
+      color: #9ca3af;
+    }
+
+    .pill-col {
+      width: 1%;
+      white-space: nowrap;
+      padding-right: .75rem;
+    }
+
+    .btn-col {
+      width: 1%;
+      white-space: nowrap;
+    }
+
+    button[type="submit"] {
+      min-width: 6.5rem;
+      margin: 0;
+    }
+
+    .progress-row {
+      margin-top: .3rem;
+      font-size: .9em;
+    }
+
   </style>
 </head>
+
 <body>
   <main class="container">
     {% block content %}{% endblock %}
   </main>
+  <script>
+    document.querySelectorAll('.js-utc-time').forEach(function (el) {
+      var utcStr = el.dataset.utc;
+      if (!utcStr) return;
+      var date = new Date(utcStr.replace(' ', 'T') + 'Z');
+      el.textContent = date.toLocaleString('en-US', {
+        month: 'numeric',
+        day: 'numeric',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+      });
+    });
+  </script>
 </body>
+
 </html>
