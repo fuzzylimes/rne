@@ -1,17 +1,21 @@
 """Tests for makemkv.py parser — feed real makemkvcon -r output from fixtures."""
 
+import subprocess
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from rne.makemkv import (
     C_VOLUME_NAME,
+    MakemkvError,
     T_CHAPTERS,
     T_DURATION,
     T_SIZE,
     T_SOURCE,
     parse_index_spec,
     parse_info,
+    rip_and_detect,
     summarize,
 )
 
@@ -182,3 +186,50 @@ def test_deduplication():
 def test_empty_parts_ignored():
     # Extra commas should not cause an error
     assert parse_index_spec("0,,2") == [0, 2]
+
+
+# ---------------------------------------------------------------------------
+# rip_and_detect
+# ---------------------------------------------------------------------------
+
+
+def test_rip_and_detect_returns_new_file(tmp_path):
+    existing = tmp_path / "existing.mkv"
+    existing.touch()
+    new_file = tmp_path / "B1_t00.mkv"
+
+    def fake_run(cmd, **kwargs):
+        new_file.touch()
+
+    with patch("rne.makemkv.subprocess.run", side_effect=fake_run):
+        result = rip_and_detect(disc=0, title_idx=0, raw_dir=tmp_path)
+
+    assert result == new_file
+
+
+def test_rip_and_detect_no_new_file_raises(tmp_path):
+    def fake_run(cmd, **kwargs):
+        pass  # creates nothing
+
+    with patch("rne.makemkv.subprocess.run", side_effect=fake_run):
+        with pytest.raises(MakemkvError):
+            rip_and_detect(disc=0, title_idx=0, raw_dir=tmp_path)
+
+
+def test_rip_and_detect_multiple_new_files_raises(tmp_path):
+    def fake_run(cmd, **kwargs):
+        (tmp_path / "A.mkv").touch()
+        (tmp_path / "B.mkv").touch()
+
+    with patch("rne.makemkv.subprocess.run", side_effect=fake_run):
+        with pytest.raises(MakemkvError):
+            rip_and_detect(disc=0, title_idx=0, raw_dir=tmp_path)
+
+
+def test_rip_and_detect_nonzero_exit_raises(tmp_path):
+    def fake_run(cmd, **kwargs):
+        raise subprocess.CalledProcessError(1, cmd)
+
+    with patch("rne.makemkv.subprocess.run", side_effect=fake_run):
+        with pytest.raises(subprocess.CalledProcessError):
+            rip_and_detect(disc=0, title_idx=0, raw_dir=tmp_path)

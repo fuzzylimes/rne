@@ -46,6 +46,24 @@ class StreamSummary:
     subtitle: list[SubtitleStream]
 
 
+def layouts_match(a: StreamSummary, b: StreamSummary) -> bool:
+    """Return True if a and b share the same track layout.
+
+    Compares audio track count, codec at each audio index, and subtitle
+    track count.  Video is intentionally excluded — resolution/codec
+    variation between titles on the same disc is expected and harmless for
+    encoding config purposes.
+    """
+    if len(a.audio) != len(b.audio):
+        return False
+    if len(a.subtitle) != len(b.subtitle):
+        return False
+    for a_track, b_track in zip(a.audio, b.audio):
+        if a_track.codec != b_track.codec:
+            return False
+    return True
+
+
 def probe(mkv_path: str) -> dict:
     """Run ffprobe on mkv_path and return parsed JSON."""
     cmd = [

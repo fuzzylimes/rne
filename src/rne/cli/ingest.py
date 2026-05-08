@@ -40,7 +40,8 @@ def _print_table(cols: list[str], rows: list[dict]) -> None:
 
 
 def _print_title_table(titles: dict) -> None:
-    cols = ["#", "Source", "Duration", "Size", "Ch", "Resolution", "FPS", "Audio"]
+    cols = ["#", "Source", "Duration", "Size",
+            "Ch", "Resolution", "FPS", "Audio"]
     rows = [makemkv.summarize(tid, titles[tid]) for tid in sorted(titles)]
     _print_table(cols, rows)
 
@@ -48,7 +49,8 @@ def _print_title_table(titles: dict) -> None:
 def _print_stream_tables(summary: probe.StreamSummary) -> None:
     if summary.video:
         print("\nVideo:")
-        vcols = ["#", "Codec", "Resolution", "FPS", "Field", "Lang", "Def", "Forced"]
+        vcols = ["#", "Codec", "Resolution", "FPS",
+                 "Field", "Lang", "Def", "Forced"]
         vrows = [
             {
                 "#": i,
@@ -66,7 +68,8 @@ def _print_stream_tables(summary: probe.StreamSummary) -> None:
 
     if summary.audio:
         print("\nAudio:")
-        acols = ["#", "Codec", "Ch", "Bitrate", "Lang", "Title", "Def", "Forced"]
+        acols = ["#", "Codec", "Ch", "Bitrate",
+                 "Lang", "Title", "Def", "Forced"]
         arows = [
             {
                 "#": i,
@@ -119,6 +122,7 @@ def build_preview(jobs_plan: list[dict]) -> str:
     """Return preview text for a list of job plan dicts.
 
     Each dict must have: label, output_path, handbrake_args (HandbrakeArgs).
+    Optional key layout_warning=True adds a ⚠ marker to that line.
     Pure function — no I/O.
     """
     lines = ["Preview:"]
@@ -130,8 +134,37 @@ def build_preview(jobs_plan: list[dict]) -> str:
             f"(a={audio_str} s={hb.subtitle_tracks}"
             f" crf={hb.quality} preset={hb.preset})"
         )
-        lines.append(f"  {job['label']:<8}  {out_name}  {details}")
+        warning = "  ⚠ different track layout" if job.get("layout_warning") else ""
+        lines.append(f"  {job['label']:<8}  {out_name}  {details}{warning}")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Mismatch description (pure — tested directly)
+# ---------------------------------------------------------------------------
+
+
+def _describe_mismatch(
+    ref: probe.StreamSummary,
+    other: probe.StreamSummary,
+    label: str,
+) -> str:
+    """Human-readable description of how other's layout differs from ref."""
+    parts: list[str] = []
+    if len(other.audio) != len(ref.audio):
+        parts.append(
+            f"audio track count {len(other.audio)} vs reference {len(ref.audio)}"
+        )
+    else:
+        for i, (ra, oa) in enumerate(zip(ref.audio, other.audio), 1):
+            if ra.codec != oa.codec:
+                parts.append(f"audio track {i} is {oa.codec} instead of {ra.codec}")
+    if len(other.subtitle) != len(ref.subtitle):
+        parts.append(
+            f"subtitle track count {len(other.subtitle)} vs reference {len(ref.subtitle)}"
+        )
+    desc = "; ".join(parts) if parts else "unknown difference"
+    return f"{label} differs: {desc}."
 
 
 # ---------------------------------------------------------------------------
@@ -147,13 +180,18 @@ def _build_jobs_plan(
     episodes: list[int] | None,
     movie: str | None,
     staging_dir: pathlib.Path,
-    raw_dir: pathlib.Path,
-    surviving_indexes: list[int],
+    rip_manifest: list[tuple[int, pathlib.Path]],
     hb_args: HandbrakeArgs,
 ) -> list[dict]:
+    """Build a list of job plan dicts from the rip manifest.
+
+    rip_manifest is an ordered list of (title_idx, file_path) as produced
+    by the rip loop — the source_path for each job is taken directly from
+    the manifest rather than being constructed from a title_tNN.mkv template.
+    """
     jobs = []
-    for idx_pos, title_idx in enumerate(surviving_indexes):
-        source = str(raw_dir / f"title_t{title_idx:02d}.mkv")
+    for idx_pos, (title_idx, file_path) in enumerate(rip_manifest):
+        source = str(file_path)
 
         if is_tv:
             ep = episodes[idx_pos]  # type: ignore[index]
@@ -161,24 +199,27 @@ def _build_jobs_plan(
             out_name = f"{show} - S{season:02d}E{ep:02d}.mkv"
             out_path = str(out_dir / out_name)
             label = f"S{season:02d}E{ep:02d}"
+            episode_out: int | None = ep
         else:
-            if len(surviving_indexes) == 1:
+            if len(rip_manifest) == 1:
                 out_name = f"{movie}.mkv"
             else:
                 out_name = f"{movie}_t{title_idx:02d}.mkv"
             out_path = str(staging_dir / out_name)
             label = movie  # type: ignore[assignment]
+            episode_out = None
 
         jobs.append(
             {
                 "label": label,
                 "show": show,
                 "season": season,
-                "episode": ep if is_tv else None,
+                "episode": episode_out,
                 "movie": movie,
                 "source_path": source,
                 "output_path": out_path,
                 "handbrake_args": hb_args,
+                "layout_warning": False,
             }
         )
     return jobs
@@ -273,7 +314,8 @@ def _insert_jobs(conn, batch_id: int, jobs_plan: list[dict]) -> None:
     for job in jobs_plan:
         hb: HandbrakeArgs = job["handbrake_args"]
         # Ensure output directory exists before the worker runs.
-        pathlib.Path(job["output_path"]).parent.mkdir(parents=True, exist_ok=True)
+        pathlib.Path(job["output_path"]).parent.mkdir(
+            parents=True, exist_ok=True)
         conn.execute(
             """
             INSERT INTO jobs
@@ -303,7 +345,7 @@ def _insert_jobs(conn, batch_id: int, jobs_plan: list[dict]) -> None:
 def run() -> None:
     # ---- Step 1: disc detection ------------------------------------------------
     try:
-        disc_info, titles = makemkv.run_info(disc=0, minlength=0)
+        disc_info, titles = makemkv.run_info(disc=0, minlength=900)
     except subprocess.CalledProcessError:
         sys.exit(1)
 
@@ -386,14 +428,19 @@ def run() -> None:
         show = None
         season = None
         episodes = None
-        movie = mungefilename(prompts.prompt_with_default("Movie title", volume_name))
+        movie = mungefilename(
+            prompts.prompt_with_default("Movie title", volume_name))
 
-    # ---- Step 4: staging dir confirm, create batch row, and rip ---------------
-    staging_dir = pathlib.Path(config.STAGING_ROOT) / (show if is_tv else movie)  # type: ignore[arg-type]
+    # ---- Step 4: staging dir confirm, create batch row, rip per title ----------
+    #
+    # Order of operations (sanity-checked against spec):
+    #   a. INSERT into ingest_batches → capture batch_id
+    #   b. Construct raw_dir using batch_id
+    #   c. mkdir(exist_ok=False) — fresh id must produce a fresh dir
+    #   d. Rip loop: rip_and_detect per title, build rip_manifest in disc order
+    staging_dir = pathlib.Path(config.STAGING_ROOT) / \
+        (show if is_tv else movie)  # type: ignore[arg-type]
 
-    # Open DB and create the ingest_batches row now so its id becomes part of
-    # the raw dir path.  An abort after this point leaves an orphaned batch row;
-    # that is acceptable — the row carries no job data and no real-data exists yet.
     conn = db.connect()
     db.init_db(conn)
     batch_id = _create_ingest_batch(
@@ -412,41 +459,41 @@ def run() -> None:
         staging_dir = pathlib.Path(input("Staging directory: ").strip())
         raw_dir = staging_dir / "_raw" / f"batch-{batch_id}"
 
-    raw_dir.mkdir(parents=True, exist_ok=True)
+    raw_dir.mkdir(parents=True, exist_ok=False)
 
-    failed_idxs = makemkv.run_rips(
-        disc=0, minlength=0, outdir=str(raw_dir), indexes=selected_indexes
-    )
+    rip_manifest: list[tuple[int, pathlib.Path]] = []
 
-    surviving_indexes = list(selected_indexes)
-    for failed_idx in failed_idxs:
-        print(
-            f"\nTitle {failed_idx} failed. "
-            "Abort the whole ingest, or skip and continue? [a/s]"
-        )
-        while True:
-            c = input("> ").strip().lower()
-            if c == "a":
-                print("Aborting.", file=sys.stderr)
-                sys.exit(1)
-            if c == "s":
-                surviving_indexes.remove(failed_idx)
-                break
-            print("Please enter 'a' to abort or 's' to skip.", file=sys.stderr)
+    for title_idx in selected_indexes:
+        try:
+            file_path = makemkv.rip_and_detect(
+                disc=0, title_idx=title_idx, raw_dir=raw_dir
+            )
+            rip_manifest.append((title_idx, file_path))
+        except (subprocess.CalledProcessError, makemkv.MakemkvError):
+            print(
+                f"\nTitle {title_idx} failed. "
+                "Abort the whole ingest, or skip and continue? [a/s]"
+            )
+            while True:
+                c = input("> ").strip().lower()
+                if c == "a":
+                    print("Aborting.", file=sys.stderr)
+                    sys.exit(1)
+                if c == "s":
+                    break
+                print("Please enter 'a' to abort or 's' to skip.", file=sys.stderr)
 
-    if not surviving_indexes:
+    if not rip_manifest:
         print("No titles survived. Aborting.", file=sys.stderr)
         sys.exit(1)
 
     surviving_episodes: list[int] | None = None
     if is_tv:
-        surviving_episodes = [
-            episodes[selected_indexes.index(idx)]  # type: ignore[index]
-            for idx in surviving_indexes
-        ]
+        episode_by_idx = dict(zip(selected_indexes, episodes))  # type: ignore[arg-type]
+        surviving_episodes = [episode_by_idx[ti] for ti, _ in rip_manifest]
 
     # ---- Step 5: probe first ripped file ---------------------------------------
-    first_source = raw_dir / f"title_t{surviving_indexes[0]:02d}.mkv"
+    first_source = rip_manifest[0][1]
     print(f"\nProbing {first_source.name} ...")
 
     try:
@@ -457,22 +504,6 @@ def run() -> None:
         sys.exit(1)
 
     _print_stream_tables(stream_summary)
-
-    # Warn if later files differ (best-effort: just check file count variation)
-    if len(surviving_indexes) > 1:
-        second_source = raw_dir / f"title_t{surviving_indexes[1]:02d}.mkv"
-        if second_source.exists():
-            try:
-                probe2 = probe.summarize(probe.probe(str(second_source)))
-                if len(probe2.audio) != len(stream_summary.audio) or len(
-                    probe2.subtitle
-                ) != len(stream_summary.subtitle):
-                    print(
-                        "\nWarning: subsequent titles differ in track layout.",
-                        file=sys.stderr,
-                    )
-            except Exception:
-                pass
 
     # ---- Step 6: encoding config -----------------------------------------------
     print()
@@ -510,7 +541,8 @@ def run() -> None:
     audio_tracks: list[AudioTrack] = []
     for track_num in audio_track_indexes:
         stream = stream_summary.audio[track_num - 1]
-        audio_tracks.append(prompts.prompt_audio_track_decision(stream, track_num))
+        audio_tracks.append(
+            prompts.prompt_audio_track_decision(stream, track_num))
 
     if not audio_tracks:
         audio_tracks = [AudioTrack(track=1)]
@@ -531,7 +563,8 @@ def run() -> None:
                 subtitle_tracks = parsed_sub
 
     # d. CRF, preset, decomb
-    crf_str = prompts.prompt_with_default("Quality (CRF)", str(config.DEFAULT_QUALITY))
+    crf_str = prompts.prompt_with_default(
+        "Quality (CRF)", str(config.DEFAULT_QUALITY))
     try:
         crf = int(crf_str)
     except ValueError:
@@ -567,7 +600,7 @@ def run() -> None:
         decomb=decomb,
     )
 
-    # ---- Step 7: preview, edit, confirm ----------------------------------------
+    # ---- Step 7: preview, mismatch detection, edit, confirm --------------------
     jobs_plan = _build_jobs_plan(
         is_tv=is_tv,
         show=show,
@@ -575,22 +608,60 @@ def run() -> None:
         episodes=surviving_episodes,
         movie=movie,
         staging_dir=staging_dir,
-        raw_dir=raw_dir,
-        surviving_indexes=surviving_indexes,
+        rip_manifest=rip_manifest,
         hb_args=hb_args,
     )
+
+    # Probe titles 2..N and flag any that differ from title 1's layout.
+    mismatch_details: list[str] = []
+    for pos, (_, file_path) in enumerate(rip_manifest[1:], 1):
+        try:
+            other_summary = probe.summarize(probe.probe(str(file_path)))
+            if not probe.layouts_match(stream_summary, other_summary):
+                jobs_plan[pos]["layout_warning"] = True
+                mismatch_details.append(
+                    _describe_mismatch(stream_summary, other_summary, jobs_plan[pos]["label"])
+                )
+        except Exception:
+            pass
 
     while True:
         n = len(jobs_plan)
         preview = build_preview(jobs_plan)
-        decision = prompts.confirm_or_edit(preview + f"\n\nQueue these {n} job(s)?")
-        if decision == "yes":
-            break
-        if decision == "no":
-            print("Aborted.")
-            sys.exit(0)
-        # edit
-        jobs_plan = _edit_plan(jobs_plan)
+
+        if mismatch_details:
+            mismatch_text = "\n".join(mismatch_details)
+            print(f"{preview}\n\n{mismatch_text}")
+            resp = input(
+                f"\nQueue these {n} job(s)? [Y/n/edit/skip-mismatched]: "
+            ).strip().lower()
+            if resp in ("", "y", "yes"):
+                break
+            if resp in ("n", "no"):
+                print("Aborted.")
+                sys.exit(0)
+            if resp in ("e", "edit"):
+                jobs_plan = _edit_plan(jobs_plan)
+                continue
+            if resp in ("skip-mismatched", "skip"):
+                jobs_plan = [j for j in jobs_plan if not j.get("layout_warning")]
+                if not jobs_plan:
+                    print("No matching titles to queue. Aborting.", file=sys.stderr)
+                    sys.exit(1)
+                mismatch_details = []
+                break
+            print("Please enter Y, n, edit, or skip-mismatched.", file=sys.stderr)
+        else:
+            decision = prompts.confirm_or_edit(
+                preview + f"\n\nQueue these {n} job(s)?"
+            )
+            if decision == "yes":
+                break
+            if decision == "no":
+                print("Aborted.")
+                sys.exit(0)
+            # edit
+            jobs_plan = _edit_plan(jobs_plan)
 
     # ---- Step 8: insert and exit -----------------------------------------------
     _insert_jobs(conn, batch_id, jobs_plan)

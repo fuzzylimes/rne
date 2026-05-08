@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from rne.probe import StreamSummary, summarize
+from rne.probe import AudioStream, StreamSummary, SubtitleStream, layouts_match, summarize
 
 FIXTURE = Path(__file__).parent / "fixtures" / "ffprobe_sample.json"
 
@@ -231,3 +231,50 @@ def test_audio_channels_none_when_absent():
     }
     s = summarize(data)
     assert s.audio[0].channels is None
+
+
+# ---------------------------------------------------------------------------
+# layouts_match
+# ---------------------------------------------------------------------------
+
+
+def _audio(codec: str) -> AudioStream:
+    return AudioStream(
+        codec=codec, channels=2, lang="", title="", default=False, forced=False, bitrate=None
+    )
+
+
+def _sub() -> SubtitleStream:
+    return SubtitleStream(codec="pgs", lang="", title="", default=False, forced=False, duration=None)
+
+
+def _summary(audio_codecs: tuple[str, ...], num_subs: int) -> StreamSummary:
+    return StreamSummary(
+        video=[],
+        audio=[_audio(c) for c in audio_codecs],
+        subtitle=[_sub() for _ in range(num_subs)],
+    )
+
+
+def test_layouts_match_identical():
+    a = _summary(("ac3", "truehd"), 2)
+    b = _summary(("ac3", "truehd"), 2)
+    assert layouts_match(a, b) is True
+
+
+def test_layouts_match_different_audio_codec():
+    a = _summary(("ac3",), 2)
+    b = _summary(("dts",), 2)
+    assert layouts_match(a, b) is False
+
+
+def test_layouts_match_different_audio_count():
+    a = _summary(("ac3", "dts"), 2)
+    b = _summary(("ac3",), 2)
+    assert layouts_match(a, b) is False
+
+
+def test_layouts_match_different_subtitle_count():
+    a = _summary(("ac3",), 2)
+    b = _summary(("ac3",), 3)
+    assert layouts_match(a, b) is False

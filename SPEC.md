@@ -314,13 +314,13 @@ Raw files are isolated per ingest batch to prevent cross-batch clobbering when d
 /mnt/media/staging/Initial D/
     _raw/
         batch-7/
-            title_t02.mkv                      ← raw from makemkv (disc 1)
-            title_t03.mkv
-            title_t04.mkv
-            title_t05.mkv
+            B1_t00.mkv                         ← raw from makemkv (disc 1, real name varies)
+            A1_t01.mkv
+            D1_t02.mkv
+            C1_t03.mkv
         batch-9/
-            title_t00.mkv                      ← raw from makemkv (disc 2)
-            title_t01.mkv
+            00038.mkv                          ← raw from makemkv (disc 2, real name varies)
+            00039.mkv
     Season 01/
         Initial D - S01E05.mkv                 ← encoded
         Initial D - S01E06.mkv
@@ -329,11 +329,13 @@ Raw files are isolated per ingest batch to prevent cross-batch clobbering when d
 /mnt/media/staging/The Silence of the Lambs/
     _raw/
         batch-12/
-            title_t00.mkv                      ← raw
+            D1_00.mkv                          ← raw (real name varies)
     The Silence of the Lambs.mkv               ← encoded
 ```
 
-Raw files keep makemkv's `title_tNN.mkv` names inside a `_raw/batch-{ingest_batch_id}/` subdir. Encoded files for TV go in a `Season NN/` subdir alongside `_raw/`; for movies they sit at the show root alongside `_raw/`. After verifying, the user moves the encoded files to the real library themselves; this tool does not manage the library.
+Raw filenames are whatever makemkv produces from the disc's TINFO fields — they can be anything (`B1_t00.mkv`, `00038.mkv`, `D1_00.mkv`, etc.). **rne never constructs or predicts raw filenames.** The only assumption is that exactly one new `*.mkv` file appears in the batch raw dir per rip; the ingest CLI snapshots the dir before and after each rip to detect the new file.
+
+Raw files live inside a `_raw/batch-{ingest_batch_id}/` subdir. Encoded files for TV go in a `Season NN/` subdir alongside `_raw/`; for movies they sit at the show root alongside `_raw/`. After verifying, the user moves the encoded files to the real library themselves; this tool does not manage the library.
 
 Output filename templates:
 
@@ -387,7 +389,12 @@ If Movie: prompt for the title, same default-from-disc behavior. One job, no epi
 
 ### Step 4 — Staging dir confirm and rip
 
-At the start of step 4, before prompting the user, the CLI creates the `ingest_batches` row in the DB and obtains its id. This id is required to construct the batch-scoped raw directory path shown to the user.
+At the start of step 4, the CLI performs these operations in order:
+
+1. **INSERT into `ingest_batches`**, capture `cursor.lastrowid` as `batch_id`.
+2. **Construct `raw_dir`** = `{staging_root}/{show}/_raw/batch-{batch_id}/`.
+3. **`raw_dir.mkdir(parents=True, exist_ok=False)`** — `exist_ok=False` is intentional: a fresh batch id must produce a fresh dir; if the dir already exists something is wrong (id collision or stale state) and a clear error is preferable to silently mixing rips.
+4. **Confirm and rip** (see below).
 
 Right before the rip kicks off:
 
@@ -397,7 +404,14 @@ Rip to /mnt/media/staging/Initial D/_raw/batch-7/ [Y/n]:
 
 `n` opens a path prompt to override the staging root. The batch-scoped `_raw/batch-{id}/` suffix is always appended. This handles "disc title was hot garbage and I forgot to fix it in step 3" without forcing every ingest through an extra prompt.
 
-Then run `makemkvcon mkv` for each selected title sequentially. makemkv's stdout streams to the terminal so the user sees its progress bars. If any rip fails, prompt:
+Then, for each selected title **in disc-selection order**:
+
+a. Snapshot `before = set(raw_dir.glob("*.mkv"))`.
+b. Run `makemkvcon mkv` for this title. stdout streams to the terminal so the user sees progress bars.
+c. Snapshot `after = set(raw_dir.glob("*.mkv"))`. Compute `new = after - before`. If `len(new) != 1`, abort with a clear error showing what is in the dir.
+d. Append `(title_idx, new_file_path)` to the **rip manifest** — an in-memory ordered list of `(title_idx, Path)` pairs that maps disc-title order to actual filenames.
+
+If a rip fails (non-zero exit), prompt:
 
 ```
 Title 5 failed. Abort the whole ingest, or skip and continue? [a/s]
@@ -405,9 +419,11 @@ Title 5 failed. Abort the whole ingest, or skip and continue? [a/s]
 
 Never silently queue a partial batch.
 
+The rip manifest is the authoritative record of which file belongs to which title. Raw filenames are whatever makemkv produces — the only assumption rne makes is that exactly one new `*.mkv` file appears per rip.
+
 ### Step 5 — Probe the first ripped file
 
-Run `ffprobe` on file 1, print the video/audio/subtitle table. Extends the existing `mkvprobe-format.py` output:
+Run `ffprobe` on `rip_manifest[0].path` (the first file from the rip manifest), print the video/audio/subtitle table. Extends the existing `mkvprobe-format.py` output:
 
 - **Video**: as today (codec, resolution, fps, field order, lang, default, forced).
 - **Audio**: add a **Bitrate** column and a **Channels** column. Bitrate is read from `stream.bit_rate` (always present for AC3/DTS, sometimes missing for TrueHD where it's container-level). If `bit_rate` is absent for a stream, the probe table shows `—` for that track; no arithmetic fallback is performed. Channels from `stream.channels`. Bitrate catches the common Blu-ray case where two tracks are both labeled AC3 but one is 10× the other; channels feeds the transcode-bitrate recommendation in step 6.
@@ -457,27 +473,41 @@ Other notes:
 - **Decomb prompt only appears for interlaced sources.** For progressive Blu-ray it's skipped entirely. For DVDs it'll usually show up.
 - All defaults come from `config.py`. Tune once, forget.
 
-### Step 7 — Output preview, edit, confirm
+### Step 7 — Output preview, mismatch detection, edit, confirm
 
-Build the full plan and print it:
+Before showing the preview, probe each remaining file in the rip manifest (titles 2..N) and compare its track layout to title 1's using `probe.layouts_match()`. The comparison checks:
+
+- same audio track count and codecs at the same indices
+- same subtitle track count
+
+If all layouts match, the preview and confirm prompt are identical to the all-matching case below.
+
+If any titles diverge, their preview line is annotated with `⚠ different track layout` and a per-title description appears below the preview:
 
 ```
 Preview:
   S01E05  Initial D - S01E05.mkv  (a=[1:ac3@640,2:copy] s=[] crf=20 preset=slow)
   S01E06  Initial D - S01E06.mkv  (a=[1:ac3@640,2:copy] s=[] crf=20 preset=slow)
-  S01E07  Initial D - S01E07.mkv  (a=[1:ac3@640,2:copy] s=[] crf=20 preset=slow)
+  S01E07  Initial D - S01E07.mkv  (a=[1:ac3@640,2:copy] s=[] crf=20 preset=slow)  ⚠ different track layout
   S01E08  Initial D - S01E08.mkv  (a=[1:ac3@640,2:copy] s=[] crf=20 preset=slow)
 
-Queue these 4 jobs? [Y/n/edit]
+S01E07 differs: audio track 2 is dts instead of ac3.
+
+Queue these 4 jobs? [Y/n/edit/skip-mismatched]:
 ```
+
+- **Y** (default) — queue all; apply the same encoding config to mismatched titles.
+- **n** — abort without queuing anything.
+- **edit** — open the full queue plan as JSON in `$EDITOR`, re-validate, re-show the preview. The mismatch warnings persist; they reflect track layout, not encoding config.
+- **skip-mismatched** — queue only the titles whose layout matches title 1. Orphan raws for skipped titles are left on disk; the user can manually process them later (`rne ingest --add` is a planned future feature, not implemented yet).
+
+When all layouts match, the confirm prompt is the original three-way `[Y/n/edit]`.
 
 The audio summary format `[1:ac3@640,2:copy]` shows track index, action, and bitrate (when transcoding) so the user can verify at a glance.
 
-`edit` opens a tempfile of the queue plan as JSON in `$EDITOR`; on save, validate and re-show the preview. Most ingests are `Y` and done. The `edit` escape hatch catches per-file deviations (different runtime, double-length episode, etc.) without per-file prompts.
-
 ### Step 8 — Insert and exit
 
-Insert N `jobs` rows in `queued` state (the `ingest_batches` row was already created at the start of step 4), print:
+Insert N `jobs` rows in `queued` state (the `ingest_batches` row was already created at the start of step 4). The `source_path` on each row is the actual file path from the rip manifest — never a constructed `title_tNN.mkv` path. Print:
 
 ```
 Queued 4 jobs (batch 17). Worker will pick them up. Run `rne ls` to check status.

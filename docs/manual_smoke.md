@@ -14,14 +14,14 @@ RNE_DB=/tmp/rne_test.db uv run python tests/fixtures/seed_dashboard.py
 RNE_DB=/tmp/rne_test.db uv run python -m rne.dashboard.app
 
 # Confirm it's up (in another terminal)
-curl -s http://localhost:8500/ | head -3
+curl -s http://rip.lan:8500/ | head -3
 ```
 
 > **Sandbox note**: `rne-dashboard` and bare `python` won't find the venv in this
-> devcontainer. Always prefix with `uv run`. If `localhost:8500` doesn't open in
+> devcontainer. Always prefix with `uv run`. If `rip.lan:8500` doesn't open in
 > your browser, check the VS Code **Ports** tab and forward port 8500.
 
-Open http://localhost:8500 in a browser.
+Open http://rip.lan:8500 in a browser.
 
 ## Checks
 
@@ -63,7 +63,7 @@ Resize the browser to < 600 px wide (or use DevTools device emulation):
 
 # Manual Smoke Test — `rne ingest` (CLI)
 
-Run on the `rip` VM (`192.168.50.176`) with a disc in the drive.
+Run on the `rip` VM with a disc in the drive.
 
 ## Prerequisites
 

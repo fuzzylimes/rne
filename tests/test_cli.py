@@ -7,10 +7,16 @@ from unittest.mock import patch
 
 import pytest
 
-from rne.cli.ingest import _audio_summary, _build_jobs_plan, build_preview, mungefilename
+from rne.cli.ingest import (
+    _audio_summary,
+    _build_jobs_plan,
+    _describe_mismatch,
+    build_preview,
+    mungefilename,
+)
 from rne.cli.prompts import prompt_audio_track_decision
 from rne.models import AudioTrack, HandbrakeArgs
-from rne.probe import AudioStream
+from rne.probe import AudioStream, StreamSummary, SubtitleStream
 
 
 # ---------------------------------------------------------------------------
@@ -265,9 +271,10 @@ def _default_hb_args() -> HandbrakeArgs:
     )
 
 
-def test_build_jobs_plan_tv_source_path_uses_raw_dir():
+def test_build_jobs_plan_tv_source_path_uses_manifest():
     staging = pathlib.Path("/mnt/media/staging/Initial D")
     raw = staging / "_raw" / "batch-7"
+    actual_file = raw / "D1_00.mkv"
     plan = _build_jobs_plan(
         is_tv=True,
         show="Initial D",
@@ -275,16 +282,16 @@ def test_build_jobs_plan_tv_source_path_uses_raw_dir():
         episodes=[5],
         movie=None,
         staging_dir=staging,
-        raw_dir=raw,
-        surviving_indexes=[2],
+        rip_manifest=[(2, actual_file)],
         hb_args=_default_hb_args(),
     )
-    assert plan[0]["source_path"] == str(raw / "title_t02.mkv")
+    assert plan[0]["source_path"] == str(actual_file)
 
 
-def test_build_jobs_plan_movie_source_path_uses_raw_dir():
+def test_build_jobs_plan_movie_source_path_uses_manifest():
     staging = pathlib.Path("/mnt/media/staging/Aliens")
     raw = staging / "_raw" / "batch-3"
+    actual_file = raw / "00038.mkv"
     plan = _build_jobs_plan(
         is_tv=False,
         show=None,
@@ -292,11 +299,10 @@ def test_build_jobs_plan_movie_source_path_uses_raw_dir():
         episodes=None,
         movie="Aliens",
         staging_dir=staging,
-        raw_dir=raw,
-        surviving_indexes=[0],
+        rip_manifest=[(0, actual_file)],
         hb_args=_default_hb_args(),
     )
-    assert plan[0]["source_path"] == str(raw / "title_t00.mkv")
+    assert plan[0]["source_path"] == str(actual_file)
 
 
 def test_build_jobs_plan_output_path_unchanged_for_tv():
@@ -309,8 +315,7 @@ def test_build_jobs_plan_output_path_unchanged_for_tv():
         episodes=[5],
         movie=None,
         staging_dir=staging,
-        raw_dir=raw,
-        surviving_indexes=[2],
+        rip_manifest=[(2, raw / "D1_00.mkv")],
         hb_args=_default_hb_args(),
     )
     expected_out = str(staging / "Season 01" / "Initial D - S01E05.mkv")
@@ -330,8 +335,10 @@ def test_two_batches_same_show_non_overlapping_source_paths():
         episodes=[5, 6],
         movie=None,
         staging_dir=staging,
-        raw_dir=raw_batch_1,
-        surviving_indexes=[2, 3],
+        rip_manifest=[
+            (2, raw_batch_1 / "B1_t00.mkv"),
+            (3, raw_batch_1 / "B1_t01.mkv"),
+        ],
         hb_args=hb,
     )
     plan2 = _build_jobs_plan(
@@ -341,14 +348,63 @@ def test_two_batches_same_show_non_overlapping_source_paths():
         episodes=[7, 8],
         movie=None,
         staging_dir=staging,
-        raw_dir=raw_batch_2,
-        surviving_indexes=[2, 3],
+        rip_manifest=[
+            (2, raw_batch_2 / "B1_t00.mkv"),
+            (3, raw_batch_2 / "B1_t01.mkv"),
+        ],
         hb_args=hb,
     )
 
     sources1 = {j["source_path"] for j in plan1}
     sources2 = {j["source_path"] for j in plan2}
     assert sources1.isdisjoint(sources2), "batch source paths must not overlap"
+
+
+def test_build_jobs_plan_manifest_order_preserved():
+    """source_path order follows rip_manifest order, not alphabetical filename order."""
+    staging = pathlib.Path("/mnt/media/staging/Show")
+    raw = staging / "_raw" / "batch-1"
+    # Files sort differently alphabetically than disc order
+    manifest = [
+        (0, raw / "D1_00.mkv"),
+        (1, raw / "A1_00.mkv"),
+        (2, raw / "C1_00.mkv"),
+    ]
+    plan = _build_jobs_plan(
+        is_tv=True,
+        show="Show",
+        season=1,
+        episodes=[5, 6, 7],
+        movie=None,
+        staging_dir=staging,
+        rip_manifest=manifest,
+        hb_args=_default_hb_args(),
+    )
+    assert plan[0]["source_path"] == str(raw / "D1_00.mkv")
+    assert plan[1]["source_path"] == str(raw / "A1_00.mkv")
+    assert plan[2]["source_path"] == str(raw / "C1_00.mkv")
+    assert plan[0]["episode"] == 5
+    assert plan[1]["episode"] == 6
+    assert plan[2]["episode"] == 7
+
+
+def test_build_jobs_plan_source_path_matches_manifest_not_constructed():
+    """source_path is the actual manifest path, not a title_tNN.mkv name."""
+    staging = pathlib.Path("/mnt/media/staging/Initial D")
+    raw = staging / "_raw" / "batch-7"
+    actual_file = raw / "00038.mkv"
+    plan = _build_jobs_plan(
+        is_tv=True,
+        show="Initial D",
+        season=1,
+        episodes=[5],
+        movie=None,
+        staging_dir=staging,
+        rip_manifest=[(2, actual_file)],
+        hb_args=_default_hb_args(),
+    )
+    assert "title_t" not in plan[0]["source_path"]
+    assert plan[0]["source_path"] == str(actual_file)
 
 
 # ---------------------------------------------------------------------------
@@ -526,3 +582,71 @@ def test_edit_toctou_job_running_refused(tmp_path):
                 edit_mod.run(args)
 
     assert exc_info.value.code == 1
+
+
+# ---------------------------------------------------------------------------
+# build_preview — layout_warning flag
+# ---------------------------------------------------------------------------
+
+
+def test_build_preview_layout_warning_shown():
+    jobs = [
+        _job("S01E05", "/s/S01E05.mkv", [AudioTrack(track=1, codec="copy")]),
+        dict(**_job("S01E06", "/s/S01E06.mkv", [AudioTrack(track=1, codec="copy")]),
+             layout_warning=True),
+    ]
+    text = build_preview(jobs)
+    assert "⚠" in text
+    assert "S01E06" in text
+
+
+def test_build_preview_no_warning_when_layouts_match():
+    jobs = [
+        _job("S01E05", "/s/S01E05.mkv", [AudioTrack(track=1, codec="copy")]),
+        _job("S01E06", "/s/S01E06.mkv", [AudioTrack(track=1, codec="copy")]),
+    ]
+    text = build_preview(jobs)
+    assert "⚠" not in text
+
+
+# ---------------------------------------------------------------------------
+# _describe_mismatch
+# ---------------------------------------------------------------------------
+
+
+def _audio_stream(codec: str) -> AudioStream:
+    return AudioStream(
+        codec=codec, channels=6, lang="", title="", default=False, forced=False, bitrate=None
+    )
+
+
+def _stream_summary(audio_codecs: tuple[str, ...], num_subs: int = 0) -> "StreamSummary":
+    audio = [_audio_stream(c) for c in audio_codecs]
+    subs = [
+        SubtitleStream(codec="pgs", lang="", title="", default=False, forced=False, duration=None)
+        for _ in range(num_subs)
+    ]
+    return StreamSummary(video=[], audio=audio, subtitle=subs)
+
+
+def test_describe_mismatch_different_codec():
+    ref = _stream_summary(("ac3", "truehd"))
+    other = _stream_summary(("ac3", "dts"))
+    desc = _describe_mismatch(ref, other, "S01E07")
+    assert "S01E07" in desc
+    assert "dts" in desc
+    assert "truehd" in desc
+
+
+def test_describe_mismatch_different_audio_count():
+    ref = _stream_summary(("ac3", "dts"))
+    other = _stream_summary(("ac3",))
+    desc = _describe_mismatch(ref, other, "S01E07")
+    assert "audio track count" in desc
+
+
+def test_describe_mismatch_different_subtitle_count():
+    ref = _stream_summary(("ac3",), num_subs=2)
+    other = _stream_summary(("ac3",), num_subs=3)
+    desc = _describe_mismatch(ref, other, "S01E07")
+    assert "subtitle track count" in desc

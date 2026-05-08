@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import io
+import pathlib
 import subprocess
 import sys
 
@@ -134,24 +135,33 @@ def run_info(disc: int, minlength: int) -> tuple[dict, dict]:
     return parse_info(result.stdout)
 
 
-def run_rips(disc: int, minlength: int, outdir: str, indexes: list[int]) -> list[int]:
-    """Rip selected titles sequentially. Streams makemkvcon stdout to the terminal.
+class MakemkvError(Exception):
+    """Raised when makemkvcon produces unexpected output."""
 
-    Returns a list of failed title indexes (empty on full success).
+
+def rip_and_detect(disc: int, title_idx: int, raw_dir: pathlib.Path) -> pathlib.Path:
+    """Rip one title and return the path of the newly created MKV.
+
+    Takes a before/after snapshot of raw_dir so the caller never needs to
+    predict what filename makemkv chose.  Raises subprocess.CalledProcessError
+    on non-zero exit, MakemkvError if exactly one new *.mkv did not appear.
     """
-    failed: list[int] = []
-    for i in indexes:
-        cmd = [
-            "makemkvcon",
-            f"--minlength={minlength}",
-            "mkv",
-            f"disc:{disc}",
-            str(i),
-            outdir,
-        ]
-        print(f"\n$ {' '.join(cmd)}")
-        if subprocess.run(cmd).returncode != 0:
-            print(f"!! Title {i} failed", file=sys.stderr)
-            failed.append(i)
-    print()
-    return failed
+    before = set(raw_dir.glob("*.mkv"))
+    cmd = [
+        "makemkvcon",
+        "--minlength=0",
+        "mkv",
+        f"disc:{disc}",
+        str(title_idx),
+        str(raw_dir),
+    ]
+    print(f"\n$ {' '.join(cmd)}")
+    subprocess.run(cmd, check=True)
+    after = set(raw_dir.glob("*.mkv"))
+    new = after - before
+    if len(new) != 1:
+        raise MakemkvError(
+            f"expected 1 new .mkv after ripping title {title_idx}, "
+            f"got {len(new)}: {sorted(str(p) for p in new)}"
+        )
+    return next(iter(new))
