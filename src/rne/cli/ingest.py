@@ -10,7 +10,7 @@ import tempfile
 
 from rne import config, db, makemkv, probe
 from rne.cli import prompts
-from rne.models import AudioTrack, HandbrakeArgs
+from rne.models import AudioTrack, HandbrakeArgs, SubtitleTrack
 
 # Characters stripped from user-supplied path components, mirroring .abcde.conf:
 #   sed 's/[:><|*/\"'\''?[:cntrl:]]//g'
@@ -27,16 +27,27 @@ def mungefilename(name: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _print_table(cols: list[str], rows: list[dict]) -> None:
+def _print_table(
+    cols: list[str],
+    rows: list[dict],
+    right_align: set[str] | None = None,
+) -> None:
+    ra = right_align or set()
     widths = {
         c: max(len(c), max((len(str(r.get(c, ""))) for r in rows), default=0))
         for c in cols
     }
-    header = "  ".join(f"{c:<{widths[c]}}" for c in cols)
+    header = "  ".join(
+        f"{c:>{widths[c]}}" if c in ra else f"{c:<{widths[c]}}" for c in cols
+    )
     print(header)
     print("-" * len(header))
     for row in rows:
-        print("  ".join(f"{str(row.get(c, '')):<{widths[c]}}" for c in cols))
+        print("  ".join(
+            f"{str(row.get(c, '')):>{widths[c]}}" if c in ra
+            else f"{str(row.get(c, '')):<{widths[c]}}"
+            for c in cols
+        ))
 
 
 def _print_title_table(titles: dict) -> None:
@@ -87,7 +98,7 @@ def _print_stream_tables(summary: probe.StreamSummary) -> None:
 
     if summary.subtitle:
         print("\nSubtitles:")
-        scols = ["#", "Codec", "Lang", "Title", "Def", "Forced", "Duration"]
+        scols = ["#", "Codec", "Lang", "Title", "Def", "Forced", "Frames"]
         srows = [
             {
                 "#": i,
@@ -96,11 +107,11 @@ def _print_stream_tables(summary: probe.StreamSummary) -> None:
                 "Title": s.title,
                 "Def": "Y" if s.default else "",
                 "Forced": "Y" if s.forced else "",
-                "Duration": f"{s.duration:.0f}s" if s.duration is not None else "",
+                "Frames": str(s.frames) if s.frames is not None else "—",
             }
             for i, s in enumerate(summary.subtitle, 1)
         ]
-        _print_table(scols, srows)
+        _print_table(scols, srows, right_align={"Frames"})
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +129,13 @@ def _audio_summary(audio_tracks: list[AudioTrack]) -> str:
     return "[" + ",".join(parts) + "]"
 
 
+def _subtitle_summary(subtitle_tracks: list[SubtitleTrack]) -> str:
+    parts = []
+    for t in subtitle_tracks:
+        parts.append(f"{t.track}*" if t.default else str(t.track))
+    return "[" + ",".join(parts) + "]"
+
+
 def build_preview(jobs_plan: list[dict]) -> str:
     """Return preview text for a list of job plan dicts.
 
@@ -130,10 +148,11 @@ def build_preview(jobs_plan: list[dict]) -> str:
         hb: HandbrakeArgs = job["handbrake_args"]
         out_name = pathlib.Path(job["output_path"]).name
         audio_str = _audio_summary(hb.audio_tracks)
-        details = (
-            f"(a={audio_str} s={hb.subtitle_tracks}"
-            f" crf={hb.quality} preset={hb.preset})"
-        )
+        sub_str = _subtitle_summary(hb.subtitle_tracks)
+        details = f"(a={audio_str} s={sub_str} crf={hb.quality} preset={hb.preset}"
+        if hb.tune is not None:
+            details += f" tune={hb.tune}"
+        details += ")"
         warning = "  ⚠ different track layout" if job.get("layout_warning") else ""
         lines.append(f"  {job['label']:<8}  {out_name}  {details}{warning}")
     return "\n".join(lines)
@@ -549,7 +568,7 @@ def run() -> None:
 
     # c. Subtitle track selection
     num_subs = len(stream_summary.subtitle)
-    subtitle_tracks: list[int] = []
+    subtitle_track_indexes: list[int] = []
     if num_subs > 0:
         sub_range = f"1-{num_subs}" if num_subs > 1 else "1"
         raw_sub = input(
@@ -558,9 +577,41 @@ def run() -> None:
         if raw_sub and raw_sub.lower() != "none":
             parsed_sub = makemkv.parse_index_spec(raw_sub)
             if parsed_sub is None:
-                subtitle_tracks = list(range(1, num_subs + 1))
+                subtitle_track_indexes = list(range(1, num_subs + 1))
             else:
-                subtitle_tracks = parsed_sub
+                subtitle_track_indexes = parsed_sub
+
+    # c2. Default subtitle selection
+    subtitle_tracks: list[SubtitleTrack] = []
+    if subtitle_track_indexes:
+        subtitle_tracks = [SubtitleTrack(track=n) for n in subtitle_track_indexes]
+        n_sel = len(subtitle_track_indexes)
+        if n_sel == 1:
+            def_prompt = "Default subtitle track? (1 or 0 for none) [0]: "
+        else:
+            def_prompt = (
+                f"Default subtitle track? (1-{n_sel}, or 0 for none) [0]: "
+            )
+        while True:
+            raw_def = input(def_prompt).strip()
+            if not raw_def or raw_def == "0":
+                break
+            try:
+                sel = int(raw_def)
+                if 1 <= sel <= n_sel:
+                    source_track = subtitle_track_indexes[sel - 1]
+                    subtitle_tracks[sel - 1] = SubtitleTrack(
+                        track=source_track, default=True
+                    )
+                    if source_track != sel:
+                        print(f"Marked source track {source_track} as default.")
+                    break
+                print(
+                    f"Please enter a number between 0 and {n_sel}.",
+                    file=sys.stderr,
+                )
+            except ValueError:
+                print("Please enter a number.", file=sys.stderr)
 
     # d. CRF, preset, decomb
     crf_str = prompts.prompt_with_default(
@@ -575,6 +626,10 @@ def run() -> None:
         crf = config.DEFAULT_QUALITY
 
     preset = prompts.prompt_with_default("Preset", config.DEFAULT_PRESET)
+
+    tune: str | None = config.DEFAULT_TUNE
+    if prompts.prompt_yes_no("Animation source?", default=False):
+        tune = "animation"
 
     interlaced = any(
         v.field_order not in ("progressive", "", "unknown")
@@ -598,6 +653,7 @@ def run() -> None:
         audio_tracks=audio_tracks,
         subtitle_tracks=subtitle_tracks,
         decomb=decomb,
+        tune=tune,
     )
 
     # ---- Step 7: preview, mismatch detection, edit, confirm --------------------

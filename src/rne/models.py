@@ -18,6 +18,16 @@ class JobStatus(StrEnum):
 
 
 @dataclass
+class SubtitleTrack:
+    track: int
+    default: bool = False
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.track, int) or self.track < 1:
+            raise ValueError(f"track must be a positive int, got {self.track!r}")
+
+
+@dataclass
 class AudioTrack:
     track: int
     codec: str = "copy"
@@ -44,25 +54,30 @@ class HandbrakeArgs:
     audio_tracks: list[AudioTrack] = field(
         default_factory=lambda: [AudioTrack(track=1)]
     )
-    subtitle_tracks: list[int] = field(default_factory=list)
+    subtitle_tracks: list[SubtitleTrack] = field(default_factory=list)
     decomb: bool = False
+    tune: str | None = None
     extra_args: list[str] = field(default_factory=list)
 
     def to_json(self) -> str:
-        def _track_dict(t: AudioTrack) -> dict:
+        def _audio_dict(t: AudioTrack) -> dict:
             d: dict = {"track": t.track, "codec": t.codec}
             if t.bitrate is not None:
                 d["bitrate"] = t.bitrate
             return d
+
+        def _sub_dict(t: SubtitleTrack) -> dict:
+            return {"track": t.track, "default": t.default}
 
         return json.dumps(
             {
                 "encoder": self.encoder,
                 "quality": self.quality,
                 "preset": self.preset,
-                "audio_tracks": [_track_dict(t) for t in self.audio_tracks],
-                "subtitle_tracks": self.subtitle_tracks,
+                "audio_tracks": [_audio_dict(t) for t in self.audio_tracks],
+                "subtitle_tracks": [_sub_dict(t) for t in self.subtitle_tracks],
                 "decomb": self.decomb,
+                "tune": self.tune,
                 "extra_args": self.extra_args,
             }
         )
@@ -70,12 +85,17 @@ class HandbrakeArgs:
     @classmethod
     def from_json(cls, s: str) -> HandbrakeArgs:
         data = json.loads(s)
-        raw_tracks = data.get("audio_tracks", [])
-        if raw_tracks and not isinstance(raw_tracks[0], dict):
+        raw_audio = data.get("audio_tracks", [])
+        if raw_audio and not isinstance(raw_audio[0], dict):
             raise ValueError(
                 "audio_tracks must be a list of track objects, not a list of ints"
             )
-        data["audio_tracks"] = [AudioTrack(**t) for t in raw_tracks]
+        data["audio_tracks"] = [AudioTrack(**t) for t in raw_audio]
+        raw_subs = data.get("subtitle_tracks", [])
+        data["subtitle_tracks"] = [
+            SubtitleTrack(**t) if isinstance(t, dict) else SubtitleTrack(track=t)
+            for t in raw_subs
+        ]
         return cls(**data)
 
 

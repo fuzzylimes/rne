@@ -31,6 +31,11 @@ def build_command(
         raise ValueError(f"quality must be non-negative, got {args.quality}")
     if args.encoder not in _KNOWN_ENCODERS:
         raise ValueError(f"unknown encoder: {args.encoder!r}")
+    default_subs = [t for t in args.subtitle_tracks if t.default]
+    if len(default_subs) > 1:
+        raise ValueError(
+            f"at most one subtitle track may be default, got {len(default_subs)}"
+        )
 
     tracks_a: list[str] = []
     tracks_e: list[str] = []
@@ -60,9 +65,16 @@ def build_command(
     ]
 
     if args.subtitle_tracks:
-        cmd += ["-s", ",".join(str(t) for t in args.subtitle_tracks)]
+        cmd += ["-s", ",".join(str(t.track) for t in args.subtitle_tracks)]
+        for i, t in enumerate(args.subtitle_tracks, 1):
+            if t.default:
+                cmd += ["--subtitle-default", str(i)]
+                break
 
     cmd += ["--markers", "--align-av"]
+
+    if args.tune is not None:
+        cmd += ["--encoder-tune", args.tune]
 
     if args.decomb:
         cmd += ["--decomb"]

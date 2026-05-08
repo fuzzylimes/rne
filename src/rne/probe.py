@@ -36,7 +36,7 @@ class SubtitleStream:
     title: str
     default: bool
     forced: bool
-    duration: float | None  # seconds from stream header; None when absent
+    frames: int | None  # NUMBER_OF_FRAMES from MKV statistics tags; None when absent
 
 
 @dataclass
@@ -142,7 +142,14 @@ def summarize(probe_data: dict) -> StreamSummary:
             )
 
         elif codec_type == "subtitle":
-            dur = s.get("duration")
+            frames_val: int | None = None
+            for k, v in tags.items():
+                if k.startswith("NUMBER_OF_FRAMES-"):
+                    try:
+                        frames_val = int(v)
+                    except (ValueError, TypeError):
+                        pass
+                    break
             subtitle_streams.append(
                 SubtitleStream(
                     codec=s.get("codec_name", ""),
@@ -150,7 +157,7 @@ def summarize(probe_data: dict) -> StreamSummary:
                     title=tags.get("title", ""),
                     default=_yn(disp, "default"),
                     forced=_yn(disp, "forced"),
-                    duration=float(dur) if dur else None,
+                    frames=frames_val,
                 )
             )
 

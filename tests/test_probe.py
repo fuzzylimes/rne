@@ -137,15 +137,21 @@ def test_subtitle_first_codec(summary):
     assert summary.subtitle[0].codec == "hdmv_pgs_subtitle"
 
 
-def test_subtitle_duration_present(summary):
-    # All PGS subtitles in this fixture have a header duration
+def test_subtitle_frames_present(summary):
+    # All PGS subtitles in this fixture have NUMBER_OF_FRAMES tags
     for sub in summary.subtitle:
-        assert sub.duration is not None
-        assert sub.duration > 0
+        assert sub.frames is not None
+        assert sub.frames > 0
 
 
-def test_subtitle_duration_value(summary):
-    assert summary.subtitle[0].duration == pytest.approx(5432.448, rel=1e-4)
+def test_subtitle_frames_value(summary):
+    # First subtitle: NUMBER_OF_FRAMES-eng = "1618"
+    assert summary.subtitle[0].frames == 1618
+
+
+def test_subtitle_frames_forced_track_small(summary):
+    # Second subtitle has only 10 frames — forced-subtitle signal
+    assert summary.subtitle[1].frames == 10
 
 
 def test_subtitle_default_flag(summary):
@@ -165,11 +171,11 @@ def test_subtitle_languages(summary):
 
 
 # ---------------------------------------------------------------------------
-# summarize with no-duration subtitles
+# summarize with no-frames subtitles
 # ---------------------------------------------------------------------------
 
 
-def test_subtitle_duration_none_when_absent():
+def test_subtitle_frames_none_when_tag_absent():
     data = {
         "streams": [
             {
@@ -177,13 +183,29 @@ def test_subtitle_duration_none_when_absent():
                 "codec_name": "subrip",
                 "disposition": {},
                 "tags": {"language": "eng"},
-                # no "duration" key
+                # no NUMBER_OF_FRAMES-* key
             }
         ],
         "format": {},
     }
     s = summarize(data)
-    assert s.subtitle[0].duration is None
+    assert s.subtitle[0].frames is None
+
+
+def test_subtitle_frames_alternate_lang_suffix():
+    data = {
+        "streams": [
+            {
+                "codec_type": "subtitle",
+                "codec_name": "hdmv_pgs_subtitle",
+                "disposition": {},
+                "tags": {"language": "jpn", "NUMBER_OF_FRAMES-jpn": "27"},
+            }
+        ],
+        "format": {},
+    }
+    s = summarize(data)
+    assert s.subtitle[0].frames == 27
 
 
 # ---------------------------------------------------------------------------
@@ -245,7 +267,7 @@ def _audio(codec: str) -> AudioStream:
 
 
 def _sub() -> SubtitleStream:
-    return SubtitleStream(codec="pgs", lang="", title="", default=False, forced=False, duration=None)
+    return SubtitleStream(codec="pgs", lang="", title="", default=False, forced=False, frames=None)
 
 
 def _summary(audio_codecs: tuple[str, ...], num_subs: int) -> StreamSummary:

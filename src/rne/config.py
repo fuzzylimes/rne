@@ -15,6 +15,7 @@ HANDBRAKE_PREFIX = ["flatpak", "run", "--command=HandBrakeCLI", "fr.handbrake.gh
 DEFAULT_ENCODER = "x265"
 DEFAULT_QUALITY = 20
 DEFAULT_PRESET = "slow"
+DEFAULT_TUNE: str | None = None
 DEFAULT_AUDIO_CODEC = "copy"
 
 FFPROBE_TIMEOUT = 60  # standard probe only; rne probe --deep has no timeout

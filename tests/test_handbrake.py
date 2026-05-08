@@ -2,7 +2,7 @@ import pytest
 
 from rne import config
 from rne.handbrake import build_command
-from rne.models import AudioTrack, HandbrakeArgs
+from rne.models import AudioTrack, HandbrakeArgs, SubtitleTrack
 
 SRC = "/staging/title_t00.mkv"
 OUT = "/staging/Movie.mkv"
@@ -112,13 +112,33 @@ def test_multiple_transcode_tracks():
 
 
 def test_multiple_subtitle_tracks():
-    result = cmd(subtitle_tracks=[1, 2])
+    result = cmd(subtitle_tracks=[SubtitleTrack(1), SubtitleTrack(2)])
     assert _flag_value(result, "-s") == "1,2"
 
 
 def test_empty_subtitle_tracks_no_flag():
     result = cmd(subtitle_tracks=[])
     assert not _has_flag(result, "-s")
+
+
+def test_subtitle_default_flag_emitted():
+    result = cmd(subtitle_tracks=[SubtitleTrack(1), SubtitleTrack(2, default=True)])
+    assert _flag_value(result, "--subtitle-default") == "2"
+
+
+def test_subtitle_default_first_track():
+    result = cmd(subtitle_tracks=[SubtitleTrack(3, default=True), SubtitleTrack(1)])
+    assert _flag_value(result, "--subtitle-default") == "1"
+
+
+def test_subtitle_default_omitted_when_none():
+    result = cmd(subtitle_tracks=[SubtitleTrack(1), SubtitleTrack(2)])
+    assert not _has_flag(result, "--subtitle-default")
+
+
+def test_subtitle_multiple_defaults_raises():
+    with pytest.raises(ValueError, match="at most one"):
+        cmd(subtitle_tracks=[SubtitleTrack(1, default=True), SubtitleTrack(2, default=True)])
 
 
 # ---------------------------------------------------------------------------
@@ -175,3 +195,23 @@ def test_unknown_encoder_raises():
 def test_zero_quality_is_valid():
     result = cmd(quality=0)
     assert _flag_value(result, "--quality") == "0"
+
+
+# ---------------------------------------------------------------------------
+# encoder-tune
+# ---------------------------------------------------------------------------
+
+
+def test_encoder_tune_animation():
+    result = cmd(tune="animation")
+    assert _flag_value(result, "--encoder-tune") == "animation"
+
+
+def test_encoder_tune_omitted_when_none():
+    result = cmd(tune=None)
+    assert not _has_flag(result, "--encoder-tune")
+
+
+def test_encoder_tune_custom_value():
+    result = cmd(tune="grain")
+    assert _flag_value(result, "--encoder-tune") == "grain"

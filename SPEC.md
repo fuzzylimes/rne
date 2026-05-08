@@ -185,8 +185,12 @@ Stored as JSON, not a pre-rendered shell command. The worker re-renders the Hand
     {"track": 1, "codec": "ac3",  "bitrate": 640},
     {"track": 2, "codec": "copy"}
   ],
-  "subtitle_tracks": [],
+  "subtitle_tracks": [
+    {"track": 1, "default": false},
+    {"track": 2, "default": true}
+  ],
   "decomb": false,
+  "tune": null,
   "extra_args": []
 }
 ```
@@ -197,6 +201,14 @@ Stored as JSON, not a pre-rendered shell command. The worker re-renders the Hand
 - `track` — 1-based stream index from the source file. Required.
 - `codec` — `"copy"` to mux as-is, or a HandBrake encoder name (`"ac3"`, `"eac3"`, `"aac"`, etc.). Defaults to `"copy"` if omitted.
 - `bitrate` — integer kbps, required when `codec` is anything other than `"copy"`. Rejected (validation error) when `codec == "copy"`. No default; the ingest CLI fills this in based on channel count when it builds the args, but `handbrake.py` does not infer it.
+
+`subtitle_tracks` is a list of per-track objects. Each entry identifies the 1-based source stream index and whether it is the default subtitle track. HandBrake's `--subtitle-default=N` flag is emitted for the 1-based position of the default track in the list. At most one entry may have `default: true`.
+
+`SubtitleTrack` fields:
+- `track` — 1-based stream index from the source file. Required.
+- `default` — boolean. If `true`, this track is passed as the default subtitle. At most one track per job may be `true`; `handbrake.py` rejects more than one.
+
+`tune` is a string encoder-tune value passed via `--encoder-tune`. The only value produced by the ingest CLI today is `"animation"`. `null` omits the flag entirely.
 
 `extra_args` is the escape hatch for one-off flags without changing schema.
 
@@ -427,7 +439,7 @@ Run `ffprobe` on `rip_manifest[0].path` (the first file from the rip manifest), 
 
 - **Video**: as today (codec, resolution, fps, field order, lang, default, forced).
 - **Audio**: add a **Bitrate** column and a **Channels** column. Bitrate is read from `stream.bit_rate` (always present for AC3/DTS, sometimes missing for TrueHD where it's container-level). If `bit_rate` is absent for a stream, the probe table shows `—` for that track; no arithmetic fallback is performed. Channels from `stream.channels`. Bitrate catches the common Blu-ray case where two tracks are both labeled AC3 but one is 10× the other; channels feeds the transcode-bitrate recommendation in step 6.
-- **Subtitles**: add a **Duration** column. ffprobe reports stream duration from the header for free. Full subtitle tracks span the movie's duration; forced subtitle tracks span much less (sum of forced display times). This is a free, reliable signal for forced-vs-full classification — the `forced` disposition flag from MakeMKV has been observed to be unreliable.
+- **Subtitles**: add a **Frames** column. Subtitle `Frames` column reports `NUMBER_OF_FRAMES` from the MKV statistics tags written by MakeMKV. Full subtitle tracks have many cue events (typically hundreds for a 20-minute episode); forced subtitle tracks have very few (often under 30). This is the reliable forced-vs-full signal — stream duration is not, since both span the episode runtime.
 
 **Deep packet scan is opt-in only.** The full `-count_packets` scan exists as a separate `rne probe --deep <file>` command. It is not run automatically — observed to take >5 minutes on a 30 GB Blu-ray, which is unacceptable for the ingest path. The 60s timeout applies to the standard `rne probe` path only; `rne probe --deep` has no built-in timeout (the user invoked it knowing it is slow and can Ctrl-C).
 
@@ -439,9 +451,11 @@ Asked once per ingest. Defaults in brackets; empty input accepts.
 
 ```
 Audio tracks (1-3, comma-separated, 'all') [1]:
-Subtitle tracks (1-2, comma-separated, 'none') [none]:
+Subtitle tracks (1-2, comma-separated, 'none') [none]: 1,2
+Default subtitle track? (1, 2, or 0 for none) [0]: 2
 Quality (CRF) [20]:
 Preset [slow]:
+Animation source? [y/N]:
 Decomb? Source is 1080i. [y/N]: y
 ```
 
@@ -486,10 +500,10 @@ If any titles diverge, their preview line is annotated with `⚠ different track
 
 ```
 Preview:
-  S01E05  Initial D - S01E05.mkv  (a=[1:ac3@640,2:copy] s=[] crf=20 preset=slow)
-  S01E06  Initial D - S01E06.mkv  (a=[1:ac3@640,2:copy] s=[] crf=20 preset=slow)
-  S01E07  Initial D - S01E07.mkv  (a=[1:ac3@640,2:copy] s=[] crf=20 preset=slow)  ⚠ different track layout
-  S01E08  Initial D - S01E08.mkv  (a=[1:ac3@640,2:copy] s=[] crf=20 preset=slow)
+  S01E05  Initial D - S01E05.mkv  (a=[1:ac3@640,2:copy] s=[1,2*] crf=20 preset=slow tune=animation)
+  S01E06  Initial D - S01E06.mkv  (a=[1:ac3@640,2:copy] s=[1,2*] crf=20 preset=slow tune=animation)
+  S01E07  Initial D - S01E07.mkv  (a=[1:ac3@640,2:copy] s=[1,2*] crf=20 preset=slow tune=animation)  ⚠ different track layout
+  S01E08  Initial D - S01E08.mkv  (a=[1:ac3@640,2:copy] s=[1,2*] crf=20 preset=slow tune=animation)
 
 S01E07 differs: audio track 2 is dts instead of ac3.
 
@@ -782,7 +796,7 @@ systemctl --user enable --now rne-worker rne-dashboard
 
 ## Open questions to revisit during implementation
 
-- How reliable is ffprobe stream duration as a forced-vs-full subtitle signal across the user's Blu-ray collection? If unreliable, fall back to `mkvmerge --identify --identification-format json` from `mkvtoolnix-cli`. Worth keeping in pocket.
+- Stream duration was considered as a forced-vs-full subtitle signal but proved unreliable — both forced and full tracks span the episode runtime. `NUMBER_OF_FRAMES` from MKV statistics tags is the current approach. If that tag is absent on some discs, `mkvmerge --identify --identification-format json` from `mkvtoolnix-cli` is an alternative worth trying.
 - Is the 30-second dashboard meta-refresh too slow (hard to notice progress) or too fast (pointless reloads when nothing changes)? Easy to tune.
 - Default `priority` is 0 for everything. If priority becomes useful (e.g. boost a particular show ahead of the queue), `rne priority <id> <n>` is a trivial add.
 - `COPY_FRIENDLY_AUDIO_CODECS` and `AC3_BITRATE_BY_CHANNELS` are tunable — adjust if real-world testing shows DTS plays fine on your client devices, or if a different default bitrate is preferred for surround sources.
