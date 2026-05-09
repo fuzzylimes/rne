@@ -57,7 +57,7 @@ def test_defaults():
     assert _flag_value(result, "--encoder-preset") == "slow"
     assert _flag_value(result, "-a") == "1"
     assert _flag_value(result, "-E") == "copy"
-    assert _flag_value(result, "-B") == "auto"
+    assert _flag_value(result, "-B") == None
     assert not _has_flag(result, "-s")
     assert _has_flag(result, "--markers")
     assert _has_flag(result, "--align-av")
@@ -73,7 +73,7 @@ def test_single_copy_track():
     result = cmd(audio_tracks=[AudioTrack(track=1, codec="copy")])
     assert _flag_value(result, "-a") == "1"
     assert _flag_value(result, "-E") == "copy"
-    assert _flag_value(result, "-B") == "auto"
+    assert _flag_value(result, "-B") == None
 
 
 def test_single_transcode_track():
@@ -91,7 +91,7 @@ def test_mixed_copy_and_transcode():
     result = cmd(audio_tracks=tracks)
     assert _flag_value(result, "-a") == "1,2"
     assert _flag_value(result, "-E") == "ac3,copy"
-    assert _flag_value(result, "-B") == "640,auto"
+    assert _flag_value(result, "-B") == "640,"
 
 
 def test_multiple_transcode_tracks():
@@ -114,7 +114,7 @@ def test_audio_order_preserved_high_first():
     result = cmd(audio_tracks=tracks)
     assert _flag_value(result, "-a") == "4,2"
     assert _flag_value(result, "-E") == "copy,ac3"
-    assert _flag_value(result, "-B") == "auto,192"
+    assert _flag_value(result, "-B") == ",192"
 
 
 def test_audio_order_preserved_reversed():
@@ -125,7 +125,7 @@ def test_audio_order_preserved_reversed():
     result = cmd(audio_tracks=tracks)
     assert _flag_value(result, "-a") == "2,4"
     assert _flag_value(result, "-E") == "ac3,copy"
-    assert _flag_value(result, "-B") == "192,auto"
+    assert _flag_value(result, "-B") == "192,"
 
 
 # ---------------------------------------------------------------------------

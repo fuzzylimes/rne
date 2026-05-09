@@ -40,16 +40,24 @@ def build_command(
     tracks_a: list[str] = []
     tracks_e: list[str] = []
     tracks_b: list[str] = []
+    any_real_bitrate: bool = False
     for t in args.audio_tracks:
         tracks_a.append(str(t.track))
         tracks_e.append(t.codec)
-        tracks_b.append("auto" if t.codec == "copy" else str(t.bitrate))
+        # Only append if not copy
+        if t.codec == "copy":
+            tracks_b.append("")
+        else:
+            tracks_b.append(str(t.bitrate))
+            any_real_bitrate = True
 
     cmd = list(config.HANDBRAKE_PREFIX) + [
         "-i",
         source_path,
         "-o",
         output_path,
+        "-f", 
+        "av_mkv",
         "--encoder",
         args.encoder,
         "--quality",
@@ -60,9 +68,10 @@ def build_command(
         ",".join(tracks_a),
         "-E",
         ",".join(tracks_e),
-        "-B",
-        ",".join(tracks_b),
     ]
+
+    if any_real_bitrate:
+        cmd += ["-B", ",".join(tracks_b)]
 
     if args.subtitle_tracks:
         cmd += ["-s", ",".join(str(t.track) for t in args.subtitle_tracks)]
