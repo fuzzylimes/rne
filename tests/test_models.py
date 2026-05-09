@@ -101,6 +101,30 @@ def test_round_trip_preserves_other_fields():
     assert restored.extra_args == ["--crop", "0:0:0:0"]
 
 
+def test_round_trip_preserves_audio_track_order():
+    args = HandbrakeArgs(
+        audio_tracks=[
+            AudioTrack(track=4, codec="copy"),
+            AudioTrack(track=2, codec="ac3", bitrate=192),
+        ]
+    )
+    restored = HandbrakeArgs.from_json(args.to_json())
+    assert restored.audio_tracks[0].track == 4
+    assert restored.audio_tracks[1].track == 2
+
+
+def test_round_trip_reorder_high_index_first():
+    args = HandbrakeArgs(
+        audio_tracks=[
+            AudioTrack(track=3, codec="ac3", bitrate=640),
+            AudioTrack(track=1, codec="copy"),
+        ]
+    )
+    restored = HandbrakeArgs.from_json(args.to_json())
+    assert restored.audio_tracks[0].track == 3
+    assert restored.audio_tracks[1].track == 1
+
+
 def test_from_json_rejects_old_list_of_ints():
     old_json = '{"encoder":"x265","quality":20,"preset":"slow","audio_tracks":[1,2],"subtitle_tracks":[],"decomb":false,"extra_args":[]}'
     with pytest.raises(ValueError, match="list of track objects"):

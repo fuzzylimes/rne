@@ -10,6 +10,7 @@ import pytest
 from rne.cli._pipeline import (
     _audio_summary,
     _describe_mismatch,
+    _parse_audio_selection,
     _subtitle_summary,
     build_preview,
     mungefilename,
@@ -141,6 +142,48 @@ def test_non_friendly_unknown_channels_falls_back_to_640():
         result = prompt_audio_track_decision(_stream("truehd", None), 1)
     assert result.codec == "ac3"
     assert result.bitrate == 192
+
+
+# ---------------------------------------------------------------------------
+# _parse_audio_selection — order preservation and validation
+# ---------------------------------------------------------------------------
+
+_VALID_4 = [1, 2, 3, 4]
+
+
+def test_parse_audio_selection_preserves_order():
+    assert _parse_audio_selection("4,2", _VALID_4) == [4, 2]
+
+
+def test_parse_audio_selection_single_track():
+    assert _parse_audio_selection("3", _VALID_4) == [3]
+
+
+def test_parse_audio_selection_all_returns_source_order():
+    assert _parse_audio_selection("all", _VALID_4) == [1, 2, 3, 4]
+
+
+def test_parse_audio_selection_all_case_insensitive():
+    assert _parse_audio_selection("ALL", _VALID_4) == [1, 2, 3, 4]
+
+
+def test_parse_audio_selection_duplicate_raises():
+    with pytest.raises(ValueError, match="duplicate"):
+        _parse_audio_selection("4,2,4", _VALID_4)
+
+
+def test_parse_audio_selection_out_of_range_raises():
+    with pytest.raises(ValueError, match="out of range"):
+        _parse_audio_selection("5,1", _VALID_4)
+
+
+def test_parse_audio_selection_zero_raises():
+    with pytest.raises(ValueError, match="out of range"):
+        _parse_audio_selection("0", _VALID_4)
+
+
+def test_parse_audio_selection_reversed_order():
+    assert _parse_audio_selection("3,1,2", _VALID_4) == [3, 1, 2]
 
 
 # ---------------------------------------------------------------------------

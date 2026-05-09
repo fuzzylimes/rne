@@ -106,6 +106,28 @@ def test_multiple_transcode_tracks():
     assert _flag_value(result, "-B") == "640,192,96"
 
 
+def test_audio_order_preserved_high_first():
+    tracks = [
+        AudioTrack(track=4, codec="copy"),
+        AudioTrack(track=2, codec="ac3", bitrate=192),
+    ]
+    result = cmd(audio_tracks=tracks)
+    assert _flag_value(result, "-a") == "4,2"
+    assert _flag_value(result, "-E") == "copy,ac3"
+    assert _flag_value(result, "-B") == "auto,192"
+
+
+def test_audio_order_preserved_reversed():
+    tracks = [
+        AudioTrack(track=2, codec="ac3", bitrate=192),
+        AudioTrack(track=4, codec="copy"),
+    ]
+    result = cmd(audio_tracks=tracks)
+    assert _flag_value(result, "-a") == "2,4"
+    assert _flag_value(result, "-E") == "ac3,copy"
+    assert _flag_value(result, "-B") == "192,auto"
+
+
 # ---------------------------------------------------------------------------
 # Subtitle tracks
 # ---------------------------------------------------------------------------

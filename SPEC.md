@@ -196,7 +196,7 @@ Stored as JSON, not a pre-rendered shell command. The worker re-renders the Hand
 }
 ```
 
-`audio_tracks` is a list of per-track objects, not a list of indexes. Each entry carries its own copy/transcode decision so a single ingest can mix copied and transcoded tracks (the common Blu-ray case: copy the AC3 stereo track, transcode the TrueHD 5.1 to AC3 5.1).
+`audio_tracks` is a list of per-track objects, not a list of indexes. Each entry carries its own copy/transcode decision so a single ingest can mix copied and transcoded tracks (the common Blu-ray case: copy the AC3 stereo track, transcode the TrueHD 5.1 to AC3 5.1). `audio_tracks` list order is preserved verbatim through to the HandBrake command. The first entry becomes the default audio track at playback time. Order entries by user preference, not by source stream index.
 
 `AudioTrack` fields:
 - `track` — 1-based stream index from the source file. Required.
@@ -512,7 +512,7 @@ Animation source? [y/N]:
 Decomb? Source is 1080i. [y/N]: y
 ```
 
-After the audio-track *selection* prompt, the CLI inspects each chosen track's codec and channels (from the probe data already in hand). For each selected track:
+After the audio-track *selection* prompt, the CLI inspects each chosen track's codec and channels (from the probe data already in hand). The order the user types is preserved verbatim: entering "4,2" makes track 4 the default audio track at playback. For each selected track:
 
 - **If codec is in `COPY_FRIENDLY_AUDIO_CODECS`**: silently mark as `{"track": N, "codec": "copy"}`. No prompt.
 - **If codec is not copy-friendly**: prompt for the transcode decision.

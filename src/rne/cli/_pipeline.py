@@ -263,6 +263,35 @@ def prompt_metadata(
 # ---------------------------------------------------------------------------
 
 
+def _parse_audio_selection(raw: str, valid: list[int]) -> list[int]:
+    """Parse user audio-track input preserving selection order.
+
+    Returns valid (source order) for 'all'.
+    Raises ValueError for duplicate or out-of-range indexes.
+    """
+    if raw.strip().lower() == "all":
+        return list(valid)
+    result: list[int] = []
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            idx = int(part)
+        except ValueError:
+            raise ValueError(f"invalid track index: {part!r}")
+        if idx in result:
+            raise ValueError(f"duplicate track index: {idx}")
+        if idx not in valid:
+            raise ValueError(
+                f"track index {idx} out of range; valid: {valid}"
+            )
+        result.append(idx)
+    if not result:
+        raise ValueError("no track indexes given")
+    return result
+
+
 def prompt_encoding_config(stream_summary: probe.StreamSummary) -> HandbrakeArgs:
     """Run the encoding config prompts and return a HandbrakeArgs.
 
@@ -285,19 +314,11 @@ def prompt_encoding_config(stream_summary: probe.StreamSummary) -> HandbrakeArgs
             if not raw_audio:
                 audio_track_indexes = [1]
                 break
-            parsed_audio = parse_index_spec(raw_audio)
-            if parsed_audio is None:
-                audio_track_indexes = valid_audio
+            try:
+                audio_track_indexes = _parse_audio_selection(raw_audio, valid_audio)
                 break
-            invalid_a = [i for i in parsed_audio if i not in valid_audio]
-            if invalid_a:
-                print(
-                    f"Invalid audio track indexes: {invalid_a}. Valid: {valid_audio}",
-                    file=sys.stderr,
-                )
-                continue
-            audio_track_indexes = parsed_audio
-            break
+            except ValueError as exc:
+                print(str(exc), file=sys.stderr)
 
     # b. Per-track transcode decisions
     audio_tracks: list[AudioTrack] = []
