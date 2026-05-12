@@ -785,8 +785,6 @@ RestartSec=5
 TimeoutStopSec=30
 KillSignal=SIGTERM
 Nice=10
-Environment=HOME=/home/rip
-Environment=RNE_DB=/home/rip/.local/state/rne/jobs.db
 
 [Install]
 WantedBy=default.target
@@ -813,8 +811,6 @@ Type=simple
 ExecStart=__RNE_DASHBOARD_BIN__
 Restart=on-failure
 RestartSec=5
-Environment=HOME=/home/rip
-Environment=RNE_DB=/home/rip/.local/state/rne/jobs.db
 
 [Install]
 WantedBy=default.target

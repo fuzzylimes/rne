@@ -11,8 +11,6 @@ RestartSec=5
 TimeoutStopSec=30
 KillSignal=SIGTERM
 Nice=10
-Environment=HOME=/home/rip
-Environment=RNE_DB=/home/rip/.local/state/rne/jobs.db
 
 [Install]
 WantedBy=default.target
