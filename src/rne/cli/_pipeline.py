@@ -506,8 +506,9 @@ def preview_and_confirm(
                         ref_summary, other_summary, jobs_plan[pos]["label"]
                     )
                 )
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"  Warning: could not probe {file_path.name}: {exc}", file=sys.stderr)
+            jobs_plan[pos]["layout_warning"] = True
 
     while True:
         n = len(jobs_plan)

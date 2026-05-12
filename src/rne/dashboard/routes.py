@@ -126,7 +126,6 @@ def register(app: Flask) -> None:
             """
             UPDATE jobs
             SET    status        = 'queued',
-                   attempt_count = attempt_count + 1,
                    progress_pct  = NULL,
                    progress_fps  = NULL,
                    progress_eta  = NULL,

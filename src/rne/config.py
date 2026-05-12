@@ -7,7 +7,7 @@ DB_PATH: str = os.environ.get(
 )
 
 MEDIA_ROOT = "/mnt/media"
-STAGING_ROOT = "/mnt/media/staging"
+STAGING_ROOT: str = os.environ.get("RNE_STAGING_ROOT", "/mnt/media/staging")
 
 # flatpak run --command=HandBrakeCLI fr.handbrake.ghb <args>
 HANDBRAKE_PREFIX = ["flatpak", "run", "--command=HandBrakeCLI", "fr.handbrake.ghb"]

@@ -21,8 +21,17 @@ def run_cancel(args) -> None:
             file=sys.stderr,
         )
         sys.exit(1)
-    conn.execute("UPDATE jobs SET status = 'cancelled' WHERE id = ?", (args.id,))
+    cur = conn.execute(
+        "UPDATE jobs SET status = 'cancelled' WHERE id = ? AND status IN ('queued','paused')",
+        (args.id,),
+    )
     conn.commit()
+    if cur.rowcount == 0:
+        print(
+            f"Job {args.id} could not be cancelled (may have started running).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     print(f"Job {args.id} cancelled.")
 
 
@@ -43,7 +52,6 @@ def run_retry(args) -> None:
         """
         UPDATE jobs
         SET    status        = 'queued',
-               attempt_count = attempt_count + 1,
                progress_pct  = NULL,
                progress_fps  = NULL,
                progress_eta  = NULL,

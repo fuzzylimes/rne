@@ -95,5 +95,6 @@ def run_job(job: "Job", conn: "sqlite3.Connection") -> None:
         os.rename(str(partial), job.output_path)
         db.mark_done(conn, job.id)
     else:
+        # HandBrake's actionable error summary appears at the end of stderr.
         error_msg = "\n".join(stderr_buf)[-500:]
         db.mark_failed(conn, job.id, proc.returncode, error_message=error_msg)

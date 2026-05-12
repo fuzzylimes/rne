@@ -57,7 +57,7 @@ def test_defaults():
     assert _flag_value(result, "--encoder-preset") == "slow"
     assert _flag_value(result, "-a") == "1"
     assert _flag_value(result, "-E") == "copy"
-    assert _flag_value(result, "-B") == None
+    assert _flag_value(result, "-B") is None
     assert not _has_flag(result, "-s")
     assert _has_flag(result, "--markers")
     assert _has_flag(result, "--align-av")
@@ -73,7 +73,7 @@ def test_single_copy_track():
     result = cmd(audio_tracks=[AudioTrack(track=1, codec="copy")])
     assert _flag_value(result, "-a") == "1"
     assert _flag_value(result, "-E") == "copy"
-    assert _flag_value(result, "-B") == None
+    assert _flag_value(result, "-B") is None
 
 
 def test_single_transcode_track():

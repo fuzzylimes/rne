@@ -92,16 +92,21 @@ Defaults live in `src/rne/config.py`. Key constants:
 
 ```
 /mnt/media/staging/Initial D/
-    title_t02.mkv                    ← raw from MakeMKV
+    _raw/
+        batch-1/
+            title_t00.mkv            ← raw from MakeMKV
+            title_t01.mkv
     Season 01/
         Initial D - S01E05.mkv       ← encoded by worker
 
 /mnt/media/staging/The Silence of the Lambs/
-    title_t00.mkv                    ← raw
+    _raw/
+        batch-2/
+            title_t00.mkv            ← raw
     The Silence of the Lambs.mkv    ← encoded
 ```
 
-Raw files keep MakeMKV's `title_tNN.mkv` names. After verifying the encode, move files to your library manually — rne does not manage the library.
+Raw files are kept in `_raw/batch-{id}/` under the show/movie staging directory, using MakeMKV's `title_tNN.mkv` names. After verifying the encode, move files to your library manually — rne does not manage the library.
 
 ## Reliability
 

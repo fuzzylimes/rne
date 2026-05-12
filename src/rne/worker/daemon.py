@@ -49,5 +49,8 @@ def main() -> None:
             continue
 
         heartbeat.set_state("encoding", job.id)
-        run_job(job, conn)
+        try:
+            run_job(job, conn)
+        except Exception as exc:
+            db.mark_failed(conn, job.id, -1, f"worker exception: {exc}")
         heartbeat.set_state("idle")
