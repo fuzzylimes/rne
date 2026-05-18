@@ -139,17 +139,22 @@ class MakemkvError(Exception):
     """Raised when makemkvcon produces unexpected output."""
 
 
-def rip_and_detect(disc: int, title_idx: int, raw_dir: pathlib.Path) -> pathlib.Path:
+def rip_and_detect(
+    disc: int, title_idx: int, raw_dir: pathlib.Path, minlength: int = 900
+) -> pathlib.Path:
     """Rip one title and return the path of the newly created MKV.
 
     Takes a before/after snapshot of raw_dir so the caller never needs to
     predict what filename makemkv chose.  Raises subprocess.CalledProcessError
     on non-zero exit, MakemkvError if exactly one new *.mkv did not appear.
+
+    minlength must match the value passed to run_info so title indices are
+    consistent between the two commands.
     """
     before = set(raw_dir.glob("*.mkv"))
     cmd = [
         "makemkvcon",
-        "--minlength=0",
+        f"--minlength={minlength}",
         "mkv",
         f"disc:{disc}",
         str(title_idx),

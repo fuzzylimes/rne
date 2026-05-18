@@ -93,10 +93,12 @@ def _build_jobs_plan(
 # ---------------------------------------------------------------------------
 
 
-def run() -> None:
+def run(args) -> None:
+    minlength: int = args.minlength
+
     # ---- Step 1: disc detection ------------------------------------------------
     try:
-        disc_info, titles = makemkv.run_info(disc=0, minlength=900)
+        disc_info, titles = makemkv.run_info(disc=0, minlength=minlength)
     except subprocess.CalledProcessError:
         sys.exit(1)
 
@@ -175,7 +177,7 @@ def run() -> None:
     for title_idx in selected_indexes:
         try:
             file_path = makemkv.rip_and_detect(
-                disc=0, title_idx=title_idx, raw_dir=raw_dir
+                disc=0, title_idx=title_idx, raw_dir=raw_dir, minlength=minlength
             )
             rip_manifest.append((title_idx, file_path))
         except (subprocess.CalledProcessError, makemkv.MakemkvError):

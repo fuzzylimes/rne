@@ -10,7 +10,14 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("ingest", help="Rip a disc and queue the rips for encoding.")
+    ingest_p = sub.add_parser("ingest", help="Rip a disc and queue the rips for encoding.")
+    ingest_p.add_argument(
+        "-m", "--minlength",
+        type=int,
+        default=900,
+        metavar="SECONDS",
+        help="Minimum title length in seconds (default: 900)",
+    )
 
     queue_p = sub.add_parser(
         "queue", help="Queue already-ripped .mkv files for encoding."
@@ -54,7 +61,7 @@ def main() -> None:
     if args.command == "ingest":
         from rne.cli.ingest import run
 
-        run()
+        run(args)
     elif args.command == "queue":
         from rne.cli.queue import run
 

@@ -413,7 +413,7 @@ The user runs this once per disc.
 
 ### Step 1 — Disc detection
 
-Run `makemkvcon info disc:0`. On failure (no disc, drive busy), print stderr verbatim and exit non-zero. On success, print the disc volume name and the title table — same format as the existing `mkvrip` script's output.
+Run `makemkvcon -r --minlength=<N> info disc:0`, where N defaults to 900 seconds and is overridable via `rne ingest -m <N>`. On failure (no disc, drive busy), print stderr verbatim and exit non-zero. On success, print the disc volume name and the title table — same format as the existing `mkvrip` script's output.
 
 ### Step 2 — Title selection
 
@@ -472,7 +472,7 @@ Rip to /mnt/media/staging/Initial D/_raw/batch-7/ [Y/n]:
 Then, for each selected title **in disc-selection order**:
 
 a. Snapshot `before = set(raw_dir.glob("*.mkv"))`.
-b. Run `makemkvcon mkv` for this title. stdout streams to the terminal so the user sees progress bars.
+b. Run `makemkvcon --minlength=<N> mkv` for this title, using the **same `--minlength` value as step 1**. MakeMKV re-numbers title indices based on the minlength filter, so using a different value here would cause the wrong title to be ripped. stdout streams to the terminal so the user sees progress bars.
 c. Snapshot `after = set(raw_dir.glob("*.mkv"))`. Compute `new = after - before`. If `len(new) != 1`, abort with a clear error showing what is in the dir.
 d. Append `(title_idx, new_file_path)` to the **rip manifest** — an in-memory ordered list of `(title_idx, Path)` pairs that maps disc-title order to actual filenames.
 

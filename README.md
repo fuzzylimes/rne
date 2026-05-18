@@ -35,14 +35,18 @@ Dashboard: `http://localhost:8500/`
 Put a disc in the drive, then:
 
 ```bash
-rne ingest
+rne ingest           # default minlength: 900s (filters short bonus clips)
+rne ingest -m 1200   # stricter filter — useful for discs with long extras
+rne ingest -m 0      # no filter — shows every title on the disc
 ```
 
 The CLI walks through title detection, content classification (TV or movie), naming, audio/subtitle track selection, and encoding parameters. At the end it rips the selected titles and queues the encode jobs. The worker picks them up automatically.
 
+The `--minlength` / `-m` value is passed to both the title-listing and ripping steps so that title indices are always consistent between the two.
+
 Example session flow:
 
-1. Title list from `makemkvcon info disc:0`
+1. Title list from `makemkvcon -r --minlength=900 info disc:0`
 2. Select titles: `0-7`, `0,2,4`, `all`, or empty to abort
 3. TV or Movie? → prompts for show/season/episode (or movie title)
 4. Confirm staging directory, then rip
