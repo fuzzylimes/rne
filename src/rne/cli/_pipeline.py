@@ -165,7 +165,8 @@ def build_preview(jobs_plan: list[dict]) -> str:
         if hb.tune is not None:
             details += f" tune={hb.tune}"
         details += ")"
-        warning = "  ⚠ different track layout" if job.get("layout_warning") else ""
+        warning = "  ⚠ different track layout" if job.get(
+            "layout_warning") else ""
         lines.append(f"  {job['label']:<8}  {out_name}  {details}{warning}")
     return "\n".join(lines)
 
@@ -189,7 +190,8 @@ def _describe_mismatch(
     else:
         for i, (ra, oa) in enumerate(zip(ref.audio, other.audio), 1):
             if ra.codec != oa.codec:
-                parts.append(f"audio track {i} is {oa.codec} instead of {ra.codec}")
+                parts.append(
+                    f"audio track {i} is {oa.codec} instead of {ra.codec}")
     if len(other.subtitle) != len(ref.subtitle):
         parts.append(
             f"subtitle track count {len(other.subtitle)} vs reference {len(ref.subtitle)}"
@@ -229,11 +231,11 @@ def prompt_metadata(
         while True:
             try:
                 season = int(input("Season: ").strip())
-                if season > 0:
+                if season >= 0:
                     break
             except ValueError:
                 pass
-            print("Please enter a positive integer.", file=sys.stderr)
+            print("Please enter a positive integer or 0 for special.", file=sys.stderr)
 
         while True:
             try:
@@ -254,7 +256,8 @@ def prompt_metadata(
 
         return True, show, season, first_ep, None
     else:
-        movie = mungefilename(prompts.prompt_with_default("Movie title", name_hint))
+        movie = mungefilename(
+            prompts.prompt_with_default("Movie title", name_hint))
         return False, None, None, None, movie
 
 
@@ -315,7 +318,8 @@ def prompt_encoding_config(stream_summary: probe.StreamSummary) -> HandbrakeArgs
                 audio_track_indexes = [1]
                 break
             try:
-                audio_track_indexes = _parse_audio_selection(raw_audio, valid_audio)
+                audio_track_indexes = _parse_audio_selection(
+                    raw_audio, valid_audio)
                 break
             except ValueError as exc:
                 print(str(exc), file=sys.stderr)
@@ -324,7 +328,8 @@ def prompt_encoding_config(stream_summary: probe.StreamSummary) -> HandbrakeArgs
     audio_tracks: list[AudioTrack] = []
     for track_num in audio_track_indexes:
         stream = stream_summary.audio[track_num - 1]
-        audio_tracks.append(prompts.prompt_audio_track_decision(stream, track_num))
+        audio_tracks.append(
+            prompts.prompt_audio_track_decision(stream, track_num))
 
     if not audio_tracks:
         audio_tracks = [AudioTrack(track=1)]
@@ -347,7 +352,8 @@ def prompt_encoding_config(stream_summary: probe.StreamSummary) -> HandbrakeArgs
     # c2. Default subtitle selection
     subtitle_tracks: list[SubtitleTrack] = []
     if subtitle_track_indexes:
-        subtitle_tracks = [SubtitleTrack(track=n) for n in subtitle_track_indexes]
+        subtitle_tracks = [SubtitleTrack(track=n)
+                           for n in subtitle_track_indexes]
         n_sel = len(subtitle_track_indexes)
         if n_sel == 1:
             def_prompt = "Default subtitle track? (1 or 0 for none) [0]: "
@@ -367,7 +373,8 @@ def prompt_encoding_config(stream_summary: probe.StreamSummary) -> HandbrakeArgs
                         track=source_track, default=True
                     )
                     if source_track != sel:
-                        print(f"Marked source track {source_track} as default.")
+                        print(
+                            f"Marked source track {source_track} as default.")
                     break
                 print(
                     f"Please enter a number between 0 and {n_sel}.",
@@ -507,7 +514,8 @@ def preview_and_confirm(
                     )
                 )
         except Exception as exc:
-            print(f"  Warning: could not probe {file_path.name}: {exc}", file=sys.stderr)
+            print(
+                f"  Warning: could not probe {file_path.name}: {exc}", file=sys.stderr)
             jobs_plan[pos]["layout_warning"] = True
 
     while True:
@@ -529,7 +537,8 @@ def preview_and_confirm(
                 jobs_plan = edit_plan(jobs_plan)
                 continue
             if resp in ("skip-mismatched", "skip"):
-                jobs_plan = [j for j in jobs_plan if not j.get("layout_warning")]
+                jobs_plan = [
+                    j for j in jobs_plan if not j.get("layout_warning")]
                 if not jobs_plan:
                     print("No matching titles to queue. Aborting.", file=sys.stderr)
                     sys.exit(1)
@@ -580,7 +589,8 @@ def insert_jobs(conn, batch_id: int, jobs_plan: list[dict]) -> None:
     """Insert job rows for an already-created ingest batch."""
     for job in jobs_plan:
         hb: HandbrakeArgs = job["handbrake_args"]
-        pathlib.Path(job["output_path"]).parent.mkdir(parents=True, exist_ok=True)
+        pathlib.Path(job["output_path"]).parent.mkdir(
+            parents=True, exist_ok=True)
         conn.execute(
             """
             INSERT INTO jobs
