@@ -22,12 +22,28 @@ from rne.models import HandbrakeArgs
 # ---------------------------------------------------------------------------
 
 
-def _print_title_table(titles: dict) -> None:
+def _build_display_order(titles: dict) -> list[int]:
+    """Return disc title indexes sorted by .mpls source filename."""
+    return sorted(
+        titles.keys(),
+        key=lambda idx: titles[idx]["info"].get(makemkv.T_SOURCE, ""),
+    )
+
+
+def _print_title_table(titles: dict) -> list[int]:
+    """Print title table sorted by .mpls source name. Returns disc indexes in display order."""
     from rne.cli._pipeline import _print_table
-    cols = ["#", "Source", "Duration", "Size",
+    display_order = _build_display_order(titles)
+    cols = ["#", "Disc Index", "Source", "Duration", "Size",
             "Ch", "Resolution", "FPS", "Audio"]
-    rows = [makemkv.summarize(tid, titles[tid]) for tid in sorted(titles)]
+    rows = []
+    for display_idx, disc_idx in enumerate(display_order):
+        row = makemkv.summarize(disc_idx, titles[disc_idx])
+        row["#"] = display_idx
+        row["Disc Index"] = disc_idx
+        rows.append(row)
     _print_table(cols, rows)
+    return display_order
 
 
 # ---------------------------------------------------------------------------
@@ -108,10 +124,12 @@ def run(args) -> None:
 
     volume_name = disc_info.get(makemkv.C_VOLUME_NAME, "UNKNOWN")
     print(f"\nDisc: {volume_name}\n")
-    _print_title_table(titles)
+    display_order = _print_title_table(titles)
 
     # ---- Step 2: title selection -----------------------------------------------
-    all_indexes = sorted(titles.keys())
+    # User selects by display # (mpls order). We map back to disc indexes so
+    # ripping happens in mpls order, giving correct sequential episode assignment.
+    valid_display = list(range(len(display_order)))
     print()
     raw_sel = input(
         "Titles to rip (e.g. '0-7', '0,2,4', 'all', empty to abort): "
@@ -122,17 +140,19 @@ def run(args) -> None:
 
     parsed_sel = makemkv.parse_index_spec(raw_sel)
     if parsed_sel is None:
-        selected_indexes = all_indexes
+        selected_display = valid_display
     else:
-        invalid = [i for i in parsed_sel if i not in all_indexes]
+        invalid = [i for i in parsed_sel if i not in valid_display]
         if invalid:
             print(f"Invalid title indexes: {invalid}", file=sys.stderr)
             sys.exit(1)
-        selected_indexes = parsed_sel
+        selected_display = parsed_sel
 
-    if not selected_indexes:
+    if not selected_display:
         print("No titles selected. Aborted.", file=sys.stderr)
         sys.exit(1)
+
+    selected_indexes = [display_order[i] for i in selected_display]
 
     # ---- Step 3: content classification and naming -----------------------------
     print()

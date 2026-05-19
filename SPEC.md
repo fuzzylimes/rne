@@ -413,17 +413,17 @@ The user runs this once per disc.
 
 ### Step 1 — Disc detection
 
-Run `makemkvcon -r --minlength=<N> info disc:0`, where N defaults to 900 seconds and is overridable via `rne ingest -m <N>`. On failure (no disc, drive busy), print stderr verbatim and exit non-zero. On success, print the disc volume name and the title table — same format as the existing `mkvrip` script's output.
+Run `makemkvcon -r --minlength=<N> info disc:0`, where N defaults to 900 seconds and is overridable via `rne ingest -m <N>`. On failure (no disc, drive busy), print stderr verbatim and exit non-zero. On success, print the disc volume name and the title table.
+
+The title table is sorted by `.mpls` source filename (ascending) rather than by the raw disc title index. The `#` column is the sequential display index in that sorted order. A `Disc Index` column shows the underlying disc title number used internally by MakeMKV. This ensures that on discs where publishers have stored episodes out of sequential order, the table naturally presents titles in correct episode order.
 
 ### Step 2 — Title selection
-
-Same prompt as the existing script:
 
 ```
 Titles to rip (e.g. '0-7', '0,2,4', 'all', empty to abort):
 ```
 
-Same `parse_index_spec` logic, ported from `mkvrip` to `cli/prompts.py`. Empty input aborts.
+The user selects by the display `#` (`.mpls`-sorted order from step 1), not by the raw disc title index. `parse_index_spec` parses the input into a list of display indexes, which are then mapped to disc title indexes via the sorted display order. Empty input aborts.
 
 ### Step 3 — Content classification and naming
 
@@ -438,7 +438,7 @@ What's on this disc?
 
 If TV: prompt for show, season, and starting episode number. The disc volume name from `makemkvcon info` (CINFO field 2) is offered as the default for the show name — it's frequently garbage like `INITIAL_D_S1_D1` but sometimes useful as a hint. The user edits or accepts.
 
-The remaining episodes auto-increment in disc order:
+The remaining episodes auto-increment in display (`.mpls`) order:
 
 ```
 Show [INITIAL_D_S1_D1]: Initial D
@@ -469,7 +469,7 @@ Rip to /mnt/media/staging/Initial D/_raw/batch-7/ [Y/n]:
 
 `n` opens a path prompt to override the staging root. The batch-scoped `_raw/batch-{id}/` suffix is always appended. This handles "disc title was hot garbage and I forgot to fix it in step 3" without forcing every ingest through an extra prompt.
 
-Then, for each selected title **in disc-selection order**:
+Then, for each selected title **in `.mpls` display order** (i.e. the order the disc indexes appear after the step-1 sort):
 
 a. Snapshot `before = set(raw_dir.glob("*.mkv"))`.
 b. Run `makemkvcon --minlength=<N> mkv` for this title, using the **same `--minlength` value as step 1**. MakeMKV re-numbers title indices based on the minlength filter, so using a different value here would cause the wrong title to be ripped. stdout streams to the terminal so the user sees progress bars.

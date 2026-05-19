@@ -15,7 +15,7 @@ from rne.cli._pipeline import (
     build_preview,
     mungefilename,
 )
-from rne.cli.ingest import _build_jobs_plan
+from rne.cli.ingest import _build_display_order, _build_jobs_plan
 from rne.cli.prompts import prompt_audio_track_decision
 from rne.models import AudioTrack, HandbrakeArgs, SubtitleTrack
 from rne.probe import AudioStream, StreamSummary, SubtitleStream
@@ -453,6 +453,78 @@ def test_build_jobs_plan_source_path_matches_manifest_not_constructed():
     )
     assert "title_t" not in plan[0]["source_path"]
     assert plan[0]["source_path"] == str(actual_file)
+
+
+# ---------------------------------------------------------------------------
+# _build_display_order — mpls-sorted display index mapping
+# ---------------------------------------------------------------------------
+
+
+def _make_titles(*pairs: tuple[int, str]) -> dict:
+    """Build a minimal titles dict: {disc_idx: {info: {T_SOURCE: name}, streams: {}}}."""
+    from rne.makemkv import T_SOURCE
+    return {
+        disc_idx: {"info": {T_SOURCE: name}, "streams": {}}
+        for disc_idx, name in pairs
+    }
+
+
+def test_build_display_order_already_sequential():
+    titles = _make_titles((0, "00001.mpls"), (1, "00002.mpls"), (2, "00003.mpls"))
+    assert _build_display_order(titles) == [0, 1, 2]
+
+
+def test_build_display_order_out_of_order():
+    # Mirrors the user's example: disc indexes 0-7, mpls names scrambled.
+    titles = _make_titles(
+        (0, "00009.mpls"),
+        (1, "00010.mpls"),
+        (2, "00006.mpls"),
+        (3, "00008.mpls"),
+        (4, "00005.mpls"),
+        (5, "00007.mpls"),
+        (6, "00004.mpls"),
+        (7, "00002.mpls"),
+    )
+    # Sorted by mpls name: 00002→7, 00004→6, 00005→4, 00006→2, 00007→5, 00008→3, 00009→0, 00010→1
+    assert _build_display_order(titles) == [7, 6, 4, 2, 5, 3, 0, 1]
+
+
+def test_build_display_order_missing_source_sorts_first():
+    from rne.makemkv import T_SOURCE
+    titles = {
+        0: {"info": {T_SOURCE: "00005.mpls"}, "streams": {}},
+        1: {"info": {}, "streams": {}},        # no T_SOURCE → empty string → sorts first
+        2: {"info": {T_SOURCE: "00003.mpls"}, "streams": {}},
+    }
+    assert _build_display_order(titles) == [1, 2, 0]
+
+
+def test_display_to_disc_index_mapping_out_of_order():
+    """Selecting display indexes 1-7 from the scrambled disc gives disc indexes in mpls order."""
+    titles = _make_titles(
+        (0, "00009.mpls"),
+        (1, "00010.mpls"),
+        (2, "00006.mpls"),
+        (3, "00008.mpls"),
+        (4, "00005.mpls"),
+        (5, "00007.mpls"),
+        (6, "00004.mpls"),
+        (7, "00002.mpls"),
+    )
+    display_order = _build_display_order(titles)
+    # User selects display 1-7 (skipping 00002.mpls at display 0)
+    selected_display = list(range(1, 8))
+    selected_indexes = [display_order[i] for i in selected_display]
+    # Expected rip order (mpls ascending, excluding 00002): 6,4,2,5,3,0,1
+    assert selected_indexes == [6, 4, 2, 5, 3, 0, 1]
+
+
+def test_display_to_disc_index_mapping_sequential():
+    titles = _make_titles((0, "00001.mpls"), (1, "00002.mpls"), (2, "00003.mpls"))
+    display_order = _build_display_order(titles)
+    selected_indexes = [display_order[i] for i in range(3)]
+    assert selected_indexes == [0, 1, 2]
 
 
 # ---------------------------------------------------------------------------

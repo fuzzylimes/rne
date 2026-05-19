@@ -46,8 +46,8 @@ The `--minlength` / `-m` value is passed to both the title-listing and ripping s
 
 Example session flow:
 
-1. Title list from `makemkvcon -r --minlength=900 info disc:0`
-2. Select titles: `0-7`, `0,2,4`, `all`, or empty to abort
+1. Title list from `makemkvcon -r --minlength=900 info disc:0` — sorted by `.mpls` source name so episodes appear in the correct order regardless of how the publisher arranged them on disc. The `#` column is the display index; `Disc Index` shows the underlying MakeMKV title number.
+2. Select titles by display `#`: `0-7`, `0,2,4`, `all`, or empty to abort
 3. TV or Movie? → prompts for show/season/episode (or movie title)
 4. Confirm staging directory, then rip
 5. Probe of first file — shows video/audio/subtitle track table
