@@ -26,6 +26,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "path",
         help="Path to a .mkv file or a directory containing .mkv files",
     )
+    queue_p.add_argument(
+        "--dvd",
+        action="store_true",
+        help="Treat source as DVD (forces detelecine prompt for NTSC frame rates)",
+    )
 
     ls_p = sub.add_parser("ls", help="List jobs")
     ls_p.add_argument("--all", action="store_true", help="Show full history")

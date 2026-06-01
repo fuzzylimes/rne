@@ -55,6 +55,7 @@ class HandbrakeArgs:
         default_factory=lambda: [AudioTrack(track=1)]
     )
     subtitle_tracks: list[SubtitleTrack] = field(default_factory=list)
+    detelecine: bool = False
     decomb: bool = False
     tune: str | None = None
     extra_args: list[str] = field(default_factory=list)
@@ -76,6 +77,7 @@ class HandbrakeArgs:
                 "preset": self.preset,
                 "audio_tracks": [_audio_dict(t) for t in self.audio_tracks],
                 "subtitle_tracks": [_sub_dict(t) for t in self.subtitle_tracks],
+                "detelecine": self.detelecine,
                 "decomb": self.decomb,
                 "tune": self.tune,
                 "extra_args": self.extra_args,

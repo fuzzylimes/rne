@@ -159,7 +159,7 @@ def run(args) -> None:
 
     # ---- Step 5: encoding config -----------------------------------------------
     print()
-    hb_args = prompt_encoding_config(stream_summary)
+    hb_args = prompt_encoding_config(stream_summary, is_dvd=args.dvd)
 
     # ---- Step 6: build job plan ------------------------------------------------
     # Output goes to staging under the show/movie name, same as ingest.

@@ -85,6 +85,9 @@ def build_command(
     if args.tune is not None:
         cmd += ["--encoder-tune", args.tune]
 
+    if args.detelecine:
+        cmd += ["--detelecine"]
+
     if args.decomb:
         cmd += ["--decomb"]
 

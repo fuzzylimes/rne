@@ -190,6 +190,7 @@ Stored as JSON, not a pre-rendered shell command. The worker re-renders the Hand
     {"track": 1, "default": false},
     {"track": 2, "default": true}
   ],
+  "detelecine": false,
   "decomb": false,
   "tune": null,
   "extra_args": []
@@ -239,6 +240,10 @@ The prompt itself only appears when the source codec is *not* in `COPY_FRIENDLY_
 ## Queue CLI flow (`rne queue`)
 
 `rne queue <path>` is a second ingestion path for files that were ripped outside of `rne ingest` — re-queuing after a failed earlier rip, manually-ripped sources, or anything that bypassed the disc-ingest flow.
+
+### Options
+
+- **`--dvd`** — treat the source as a DVD. Forces the detelecine prompt to appear (with default Y) for any title whose frame rate falls in the NTSC range (28–31 fps), regardless of whether the video codec is `mpeg2video`. Useful when the source file's codec metadata doesn't clearly identify it as DVD-origin.
 
 ### Path resolution
 
@@ -509,6 +514,7 @@ Default subtitle track? (1, 2, or 0 for none) [0]: 2
 Quality (CRF) [20]:
 Preset [slow]:
 Animation source? [y/N]:
+Detelecine? Source is NTSC DVD. [Y/n]:    ← only shown for DVD + ~30fps sources
 Decomb? Source is 1080i. [y/N]: y
 ```
 
@@ -537,7 +543,8 @@ Examples:
 Other notes:
 - **Audio codec is always copy when possible.** Selection alone is the decision for copy-friendly tracks.
 - **For MKV output, `--audio-fallback` is meaningless.** MKV holds any codec. Track-level codec is the real decision.
-- **Decomb prompt only appears for interlaced sources.** For progressive Blu-ray it's skipped entirely. For DVDs it'll usually show up.
+- **Detelecine prompt appears only for DVD + NTSC frame rates.** The source is identified as DVD when the video codec is `mpeg2video` (always the case for genuine DVD rips) or when `--dvd` is passed to `rne queue`. The frame rate must be in the range 28–31 fps to cover NTSC variants (29.97 fps is the standard NTSC DVD rate). Default is **Y** — detelecine should be on for NTSC DVDs. `--detelecine` is emitted in the HandBrake command before `--decomb`.
+- **Decomb prompt always appears for DVD sources**, defaulting to **Y**. For non-DVD sources (Blu-ray), it only appears when the field order is interlaced, defaulting to N.
 - All defaults come from `config.py`. Tune once, forget.
 
 ### Step 7 — Output preview, mismatch detection, edit, confirm
@@ -587,7 +594,7 @@ CLI exits. The worker (running independently under systemd) claims the first job
 - **`rne ls`** — list jobs with status, optionally filtered. `--all` shows full history. Default shows queued + running + recent terminal states.
 - **`rne edit <id>`** — opens that job's `handbrake_args` JSON in `$EDITOR`. On save, validates and writes back. **Refuses to edit a `running` job** with a non-zero exit. Editing other states (queued, paused, failed, interrupted, cancelled, done) is allowed. Validation criteria (all must pass; on failure the user is offered a chance to re-open the editor):
   1. **JSON parses** — the file content is valid JSON.
-  2. **Conforms to `HandbrakeArgs` schema** — the top-level object contains only the known fields (`encoder`, `quality`, `preset`, `audio_tracks`, `subtitle_tracks`, `decomb`, `extra_args`); unknown keys are rejected.
+  2. **Conforms to `HandbrakeArgs` schema** — the top-level object contains only the known fields (`encoder`, `quality`, `preset`, `audio_tracks`, `subtitle_tracks`, `detelecine`, `decomb`, `tune`, `extra_args`); unknown keys are rejected.
   3. **`AudioTrack` invariant** — for each entry in `audio_tracks`: `bitrate` is required (positive integer) when `codec != "copy"`, and must be absent when `codec == "copy"`.
   4. **TOCTOU re-check** — after the editor closes and validation passes, re-query the job's status. If it has transitioned to `running` while the editor was open, refuse the save with the message `"job is now running; cannot edit"` and exit non-zero. This guards against the race where the worker claims a queued job while the user is editing it.
 - **`rne cancel <id>`** — terminal removal of a queued job. Sets status to `cancelled`. CLI only — not exposed in the dashboard.

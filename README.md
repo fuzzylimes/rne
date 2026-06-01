@@ -51,8 +51,22 @@ Example session flow:
 3. TV or Movie? → prompts for show/season/episode (or movie title)
 4. Confirm staging directory, then rip
 5. Probe of first file — shows video/audio/subtitle track table
-6. Audio tracks to encode, subtitle tracks, CRF quality, preset, decomb
+6. Audio tracks to encode, subtitle tracks, CRF quality, preset, detelecine (DVD + NTSC only), decomb
 7. Preview of all queued jobs — confirm or edit before inserting
+
+### Queue already-ripped files
+
+For files ripped outside of `rne ingest` (e.g. re-queuing after a failed encode, or manually-ripped sources):
+
+```bash
+rne queue /path/to/file.mkv           # single file
+rne queue /path/to/directory/         # all .mkv files in the directory, alphabetical order
+rne queue --dvd /path/to/file.mkv     # treat source as DVD (forces detelecine prompt for NTSC frame rates)
+```
+
+The `--dvd` flag is only needed when the source codec isn't `mpeg2video` — for genuine DVD rips the flag is usually redundant, but it's there as an override.
+
+Source files are never moved or copied. Do not move or delete them until encoding completes.
 
 ### Check queue status
 

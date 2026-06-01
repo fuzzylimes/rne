@@ -164,6 +164,26 @@ def test_subtitle_multiple_defaults_raises():
 
 
 # ---------------------------------------------------------------------------
+# Detelecine
+# ---------------------------------------------------------------------------
+
+
+def test_detelecine_true():
+    result = cmd(detelecine=True)
+    assert _has_flag(result, "--detelecine")
+
+
+def test_detelecine_false():
+    result = cmd(detelecine=False)
+    assert not _has_flag(result, "--detelecine")
+
+
+def test_detelecine_before_decomb():
+    result = cmd(detelecine=True, decomb=True)
+    assert result.index("--detelecine") < result.index("--decomb")
+
+
+# ---------------------------------------------------------------------------
 # Decomb
 # ---------------------------------------------------------------------------
 
@@ -191,7 +211,7 @@ def test_extra_args_appended():
 
 def test_extra_args_empty():
     result = cmd(extra_args=[])
-    assert result[-1] in ("--align-av", "--decomb")
+    assert result[-1] in ("--align-av", "--detelecine", "--decomb")
 
 
 # ---------------------------------------------------------------------------

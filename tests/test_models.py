@@ -89,6 +89,7 @@ def test_round_trip_preserves_other_fields():
         preset="fast",
         audio_tracks=[AudioTrack(track=1, codec="copy")],
         subtitle_tracks=[SubtitleTrack(track=2), SubtitleTrack(track=3)],
+        detelecine=True,
         decomb=True,
         extra_args=["--crop", "0:0:0:0"],
     )
@@ -97,6 +98,7 @@ def test_round_trip_preserves_other_fields():
     assert restored.quality == 18
     assert restored.preset == "fast"
     assert restored.subtitle_tracks == [SubtitleTrack(track=2), SubtitleTrack(track=3)]
+    assert restored.detelecine is True
     assert restored.decomb is True
     assert restored.extra_args == ["--crop", "0:0:0:0"]
 

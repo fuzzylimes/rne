@@ -295,12 +295,15 @@ def _parse_audio_selection(raw: str, valid: list[int]) -> list[int]:
     return result
 
 
-def prompt_encoding_config(stream_summary: probe.StreamSummary) -> HandbrakeArgs:
+def prompt_encoding_config(
+    stream_summary: probe.StreamSummary,
+    is_dvd: bool = False,
+) -> HandbrakeArgs:
     """Run the encoding config prompts and return a HandbrakeArgs.
 
     Reuses the same prompts as the ingest flow: audio selection, per-track
     transcode decisions, subtitle selection, CRF, preset, animation tune,
-    and decomb for interlaced sources.
+    detelecine (DVD + NTSC sources), and decomb for interlaced sources.
     """
     # a. Audio track selection
     num_audio = len(stream_summary.audio)
@@ -401,20 +404,37 @@ def prompt_encoding_config(stream_summary: probe.StreamSummary) -> HandbrakeArgs
     if prompts.prompt_yes_no("Animation source?", default=False):
         tune = "animation"
 
-    interlaced = any(
-        v.field_order not in ("progressive", "", "unknown")
-        for v in stream_summary.video
+    is_dvd_source = is_dvd or (
+        bool(stream_summary.video) and stream_summary.video[0].codec == "mpeg2video"
     )
+    detelecine = False
+    if is_dvd_source and stream_summary.video:
+        try:
+            fps_val = float(stream_summary.video[0].fps)
+        except (ValueError, TypeError):
+            fps_val = 0.0
+        if 28.0 <= fps_val <= 31.0:
+            detelecine = prompts.prompt_yes_no(
+                "Detelecine? Source is NTSC DVD.", default=True
+            )
+
     decomb = False
-    if interlaced:
-        field_label = (
-            stream_summary.video[0].field_order
-            if stream_summary.video
-            else "interlaced"
+    if is_dvd_source:
+        decomb = prompts.prompt_yes_no("Decomb? Source is DVD.", default=True)
+    else:
+        interlaced = any(
+            v.field_order not in ("progressive", "", "unknown")
+            for v in stream_summary.video
         )
-        decomb = prompts.prompt_yes_no(
-            f"Decomb? Source is {field_label}.", default=False
-        )
+        if interlaced:
+            field_label = (
+                stream_summary.video[0].field_order
+                if stream_summary.video
+                else "interlaced"
+            )
+            decomb = prompts.prompt_yes_no(
+                f"Decomb? Source is {field_label}.", default=False
+            )
 
     return HandbrakeArgs(
         encoder=config.DEFAULT_ENCODER,
@@ -422,6 +442,7 @@ def prompt_encoding_config(stream_summary: probe.StreamSummary) -> HandbrakeArgs
         preset=preset,
         audio_tracks=audio_tracks,
         subtitle_tracks=subtitle_tracks,
+        detelecine=detelecine,
         decomb=decomb,
         tune=tune,
     )
