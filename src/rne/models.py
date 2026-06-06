@@ -59,6 +59,8 @@ class HandbrakeArgs:
     decomb: bool = False
     tune: str | None = None
     extra_args: list[str] = field(default_factory=list)
+    chapter_start: int | None = None
+    chapter_end: int | None = None
 
     def to_json(self) -> str:
         def _audio_dict(t: AudioTrack) -> dict:
@@ -70,19 +72,22 @@ class HandbrakeArgs:
         def _sub_dict(t: SubtitleTrack) -> dict:
             return {"track": t.track, "default": t.default}
 
-        return json.dumps(
-            {
-                "encoder": self.encoder,
-                "quality": self.quality,
-                "preset": self.preset,
-                "audio_tracks": [_audio_dict(t) for t in self.audio_tracks],
-                "subtitle_tracks": [_sub_dict(t) for t in self.subtitle_tracks],
-                "detelecine": self.detelecine,
-                "decomb": self.decomb,
-                "tune": self.tune,
-                "extra_args": self.extra_args,
-            }
-        )
+        d: dict = {
+            "encoder": self.encoder,
+            "quality": self.quality,
+            "preset": self.preset,
+            "audio_tracks": [_audio_dict(t) for t in self.audio_tracks],
+            "subtitle_tracks": [_sub_dict(t) for t in self.subtitle_tracks],
+            "detelecine": self.detelecine,
+            "decomb": self.decomb,
+            "tune": self.tune,
+            "extra_args": self.extra_args,
+        }
+        if self.chapter_start is not None:
+            d["chapter_start"] = self.chapter_start
+        if self.chapter_end is not None:
+            d["chapter_end"] = self.chapter_end
+        return json.dumps(d)
 
     @classmethod
     def from_json(cls, s: str) -> HandbrakeArgs:

@@ -12,6 +12,7 @@ import tempfile
 
 from rne import config, probe
 from rne.cli import prompts
+from rne.cli.disc_split import Episode, autodetect, fixed_split, groups_to_episodes, manual_entry
 from rne.makemkv import parse_index_spec
 from rne.models import AudioTrack, HandbrakeArgs, SubtitleTrack
 
@@ -208,11 +209,14 @@ def _describe_mismatch(
 def prompt_metadata(
     name_hint: str,
     num_files: int,
-) -> tuple[bool, str | None, int | None, int | None, str | None]:
+    single_file_tv: bool = False,
+) -> tuple[bool, str | None, int | None, int | None, str | None, bool]:
     """Prompt for content type and naming.
 
-    Returns (is_tv, show, season, first_episode, movie).
-    Calls sys.exit(0) if the user confirms TV episodes but then aborts.
+    Returns (is_tv, show, season, first_episode, movie, is_disc_split).
+    is_disc_split is True only when single_file_tv=True and the user
+    confirms the disc contains multiple episodes in a single file.
+    Calls sys.exit(0) if the user aborts.
     """
     print("What type of content is this?")
     print("  [1] TV episodes")
@@ -226,6 +230,13 @@ def prompt_metadata(
     is_tv = choice == "1"
 
     if is_tv:
+        is_disc_split = False
+        if single_file_tv:
+            is_disc_split = prompts.prompt_yes_no(
+                "Is this a multi-episode disc file (split by chapters)?",
+                default=False,
+            )
+
         show = mungefilename(prompts.prompt_with_default("Show", name_hint))
 
         while True:
@@ -246,19 +257,20 @@ def prompt_metadata(
                 pass
             print("Please enter a positive integer.", file=sys.stderr)
 
-        episodes = list(range(first_ep, first_ep + num_files))
-        ep_preview = ", ".join(f"S{season:02d}E{ep:02d}" for ep in episodes)
-        print(f"  → titles will be {ep_preview}")
+        if not is_disc_split:
+            episodes = list(range(first_ep, first_ep + num_files))
+            ep_preview = ", ".join(f"S{season:02d}E{ep:02d}" for ep in episodes)
+            print(f"  → titles will be {ep_preview}")
 
-        if not prompts.prompt_yes_no("Confirm?"):
-            print("Aborted.")
-            sys.exit(0)
+            if not prompts.prompt_yes_no("Confirm?"):
+                print("Aborted.")
+                sys.exit(0)
 
-        return True, show, season, first_ep, None
+        return True, show, season, first_ep, None, is_disc_split
     else:
         movie = mungefilename(
             prompts.prompt_with_default("Movie title", name_hint))
-        return False, None, None, None, movie
+        return False, None, None, None, movie, False
 
 
 # ---------------------------------------------------------------------------
@@ -631,3 +643,171 @@ def insert_jobs(conn, batch_id: int, jobs_plan: list[dict]) -> None:
             ),
         )
     conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Disc-split flow (multi-episode single-file chapter splitting)
+# ---------------------------------------------------------------------------
+
+_DEFAULT_EP_MINUTES = 24
+
+
+def _print_chapter_table(chapters: list[probe.Chapter]) -> None:
+    running = 0.0
+    print(f"\n{'#':>4}  {'Title':<20}  {'Duration':>8}  {'Running':>8}")
+    print("-" * 48)
+    for ch in chapters:
+        running += ch.duration
+        dur_m, dur_s = divmod(int(ch.duration), 60)
+        run_m, run_s = divmod(int(running), 60)
+        print(
+            f"{ch.number:>4}  {ch.title:<20}  {dur_m}:{dur_s:02d}  {run_m:>4}:{run_s:02d}"
+        )
+
+
+def _print_episode_mapping(episodes: list[Episode]) -> None:
+    print(f"\n{'Ep':>4}  {'Chapters':>12}  {'Duration':>8}")
+    print("-" * 30)
+    for ep in episodes:
+        ch_range = f"{ep.chapter_start}-{ep.chapter_end}"
+        print(f"{ep.number:>4}  {ch_range:>12}  {ep.duration_str():>8}")
+
+
+def _disc_split_confirm_loop(
+    chapters: list[probe.Chapter],
+    episodes: list[Episode],
+    start_ep: int,
+) -> list[Episode]:
+    while True:
+        _print_chapter_table(chapters)
+        _print_episode_mapping(episodes)
+        print()
+        print("  [a] Accept")
+        print("  [r] Re-split with a different episode length")
+        print("  [f] Re-split with fixed chapters per episode")
+        print("  [m] Manually enter chapter ranges")
+        print("  [q] Quit")
+        choice = input("> ").strip().lower()
+
+        if choice == "a":
+            return episodes
+
+        elif choice == "r":
+            raw = input(
+                f"Episode length (minutes) [{_DEFAULT_EP_MINUTES}]: "
+            ).strip()
+            try:
+                ep_min = float(raw) if raw else _DEFAULT_EP_MINUTES
+                if ep_min <= 0:
+                    raise ValueError
+                target = ep_min * 60
+                episodes = groups_to_episodes(autodetect(chapters, target), start_ep)
+            except ValueError:
+                print("Invalid number.", file=sys.stderr)
+
+        elif choice == "f":
+            raw = input("Chapters per episode: ").strip()
+            try:
+                n = int(raw)
+                if n < 1:
+                    raise ValueError
+                episodes = fixed_split(chapters, n, start_ep)
+            except ValueError:
+                print("Invalid number.", file=sys.stderr)
+
+        elif choice == "m":
+            _print_chapter_table(chapters)
+            result = manual_entry(chapters, start_ep)
+            if result:
+                episodes = result
+
+        elif choice == "q":
+            print("Aborted.")
+            sys.exit(0)
+
+
+def prompt_disc_split(
+    source_path: pathlib.Path,
+    chapters: list[probe.Chapter],
+    start_ep: int,
+    show: str,
+    season: int,
+    staging_dir: pathlib.Path,
+    hb_args: HandbrakeArgs,
+) -> list[dict]:
+    """Interactive chapter-split flow for a single multi-episode disc file.
+
+    Asks for the episode length (default 24 min), auto-detects chapter
+    groupings, runs the confirmation loop, and returns a job plan list
+    (one job per episode, each with chapter_start/chapter_end set).
+    """
+    total_sec = sum(ch.duration for ch in chapters)
+    total_m, total_s = divmod(int(total_sec), 60)
+    total_h, total_m = divmod(total_m, 60)
+    total_str = (
+        f"{total_h}:{total_m:02d}:{total_s:02d}" if total_h
+        else f"{total_m}:{total_s:02d}"
+    )
+
+    print(f"\n  Total chapters : {len(chapters)}")
+    print(f"  Total duration : {total_str}")
+
+    raw = input(
+        f"Episode length (minutes) [{_DEFAULT_EP_MINUTES}]: "
+    ).strip()
+    try:
+        ep_min = float(raw) if raw else _DEFAULT_EP_MINUTES
+        if ep_min <= 0:
+            raise ValueError
+    except ValueError:
+        print(
+            f"Invalid input; using {_DEFAULT_EP_MINUTES} minutes.", file=sys.stderr
+        )
+        ep_min = _DEFAULT_EP_MINUTES
+
+    target_sec = ep_min * 60
+    episodes = groups_to_episodes(autodetect(chapters, target_sec), start_ep)
+    episodes = _disc_split_confirm_loop(chapters, episodes, start_ep)
+    return _build_disc_split_jobs(episodes, source_path, show, season, staging_dir, hb_args)
+
+
+def _build_disc_split_jobs(
+    episodes: list[Episode],
+    source_path: pathlib.Path,
+    show: str,
+    season: int,
+    staging_dir: pathlib.Path,
+    hb_args: HandbrakeArgs,
+) -> list[dict]:
+    """Build a job plan list from an accepted episode split. Pure — no I/O."""
+    jobs: list[dict] = []
+    for ep in episodes:
+        out_dir = staging_dir / f"Season {season:02d}"
+        out_name = f"{show} - S{season:02d}E{ep.number:02d}.mkv"
+        ep_hb_args = HandbrakeArgs(
+            encoder=hb_args.encoder,
+            quality=hb_args.quality,
+            preset=hb_args.preset,
+            audio_tracks=hb_args.audio_tracks,
+            subtitle_tracks=hb_args.subtitle_tracks,
+            detelecine=hb_args.detelecine,
+            decomb=hb_args.decomb,
+            tune=hb_args.tune,
+            extra_args=hb_args.extra_args,
+            chapter_start=ep.chapter_start,
+            chapter_end=ep.chapter_end,
+        )
+        jobs.append(
+            {
+                "label": f"S{season:02d}E{ep.number:02d}",
+                "show": show,
+                "season": season,
+                "episode": ep.number,
+                "movie": None,
+                "source_path": str(source_path),
+                "output_path": str(out_dir / out_name),
+                "handbrake_args": ep_hb_args,
+                "layout_warning": False,
+            }
+        )
+    return jobs

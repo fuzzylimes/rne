@@ -10,6 +10,7 @@ from rne.cli._pipeline import (
     mungefilename,
     preview_and_confirm,
     probe_and_display,
+    prompt_disc_split,
     prompt_encoding_config,
     prompt_metadata,
 )
@@ -131,10 +132,14 @@ def run(args) -> None:
     name_hint = mungefilename(name_hint)
 
     print()
-    is_tv, show, season, first_ep, movie = prompt_metadata(name_hint, len(manifest))
+    is_tv, show, season, first_ep, movie, is_disc_split = prompt_metadata(
+        name_hint,
+        len(manifest),
+        single_file_tv=(len(manifest) == 1),
+    )
 
     episodes: list[int] | None = None
-    if is_tv:
+    if is_tv and not is_disc_split:
         episodes = list(range(first_ep, first_ep + len(manifest)))  # type: ignore[arg-type]
 
     # ---- Step 3: create ingest_batches row (no raw dir) -----------------------
@@ -168,20 +173,37 @@ def run(args) -> None:
         show if is_tv else movie  # type: ignore[arg-type]
     )
 
-    jobs_plan = _build_jobs_plan_queue(
-        is_tv=is_tv,
-        show=show,
-        season=season,
-        episodes=episodes,
-        movie=movie,
-        staging_dir=staging_dir,
-        source_paths=manifest,
-        hb_args=hb_args,
-    )
-
-    # ---- Step 7: preview, mismatch detection, confirm --------------------------
-    remaining_paths = manifest[1:]
-    jobs_plan = preview_and_confirm(jobs_plan, stream_summary, remaining_paths)
+    # ---- Step 6b / 7: disc-split or normal job plan ----------------------------
+    if is_disc_split:
+        from rne import probe as probe_mod
+        try:
+            chapters = probe_mod.probe_chapters(str(first_source))
+        except Exception as exc:
+            print(f"Chapter probe failed: {exc}", file=sys.stderr)
+            sys.exit(1)
+        jobs_plan = prompt_disc_split(
+            source_path=first_source,
+            chapters=chapters,
+            start_ep=first_ep,  # type: ignore[arg-type]
+            show=show,  # type: ignore[arg-type]
+            season=season,  # type: ignore[arg-type]
+            staging_dir=staging_dir,
+            hb_args=hb_args,
+        )
+        jobs_plan = preview_and_confirm(jobs_plan, stream_summary, [])
+    else:
+        jobs_plan = _build_jobs_plan_queue(
+            is_tv=is_tv,
+            show=show,
+            season=season,
+            episodes=episodes,
+            movie=movie,
+            staging_dir=staging_dir,
+            source_paths=manifest,
+            hb_args=hb_args,
+        )
+        remaining_paths = manifest[1:]
+        jobs_plan = preview_and_confirm(jobs_plan, stream_summary, remaining_paths)
 
     # ---- Step 8: insert and exit -----------------------------------------------
     insert_jobs(conn, batch_id, jobs_plan)

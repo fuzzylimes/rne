@@ -8,6 +8,18 @@ from rne import config
 
 
 @dataclass
+class Chapter:
+    number: int   # 1-based
+    start: float  # seconds
+    end: float    # seconds
+    title: str
+
+    @property
+    def duration(self) -> float:
+        return self.end - self.start
+
+
+@dataclass
 class VideoStream:
     codec: str
     resolution: str
@@ -62,6 +74,32 @@ def layouts_match(a: StreamSummary, b: StreamSummary) -> bool:
         if a_track.codec != b_track.codec:
             return False
     return True
+
+
+def probe_chapters(mkv_path: str) -> list[Chapter]:
+    """Run ffprobe with -show_chapters and return a list of Chapter objects."""
+    cmd = [
+        "ffprobe",
+        "-v", "quiet",
+        "-print_format", "json",
+        "-show_chapters",
+        mkv_path,
+    ]
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, check=True, timeout=config.FFPROBE_TIMEOUT
+    )
+    data = json.loads(result.stdout)
+    chapters = []
+    for i, ch in enumerate(data.get("chapters", []), start=1):
+        chapters.append(
+            Chapter(
+                number=i,
+                start=float(ch["start_time"]),
+                end=float(ch["end_time"]),
+                title=ch.get("tags", {}).get("title", f"Chapter {i:02d}"),
+            )
+        )
+    return chapters
 
 
 def probe(mkv_path: str) -> dict:

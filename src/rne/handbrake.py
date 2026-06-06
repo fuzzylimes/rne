@@ -80,6 +80,9 @@ def build_command(
                 cmd += ["--subtitle-default", str(i)]
                 break
 
+    if args.chapter_start is not None and args.chapter_end is not None:
+        cmd += ["--chapters", f"{args.chapter_start}-{args.chapter_end}"]
+
     cmd += ["--markers", "--align-av"]
 
     if args.tune is not None:

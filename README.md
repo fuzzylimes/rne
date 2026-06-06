@@ -48,7 +48,7 @@ Example session flow:
 
 1. Title list from `makemkvcon -r --minlength=900 info disc:0` — sorted by `.mpls` source name so episodes appear in the correct order regardless of how the publisher arranged them on disc. The `#` column is the display index; `Disc Index` shows the underlying MakeMKV title number.
 2. Select titles by display `#`: `0-7`, `0,2,4`, `all`, or empty to abort
-3. TV or Movie? → prompts for show/season/episode (or movie title)
+3. TV or Movie? → if TV with exactly one title selected, asks about multi-episode disc mode first (see below), then prompts for show/season/starting episode; if movie, prompts for title
 4. Confirm staging directory, then rip
 5. Probe of first file — shows video/audio/subtitle track table
 6. Audio tracks to encode, subtitle tracks, CRF quality, preset, detelecine (DVD + NTSC only), decomb
@@ -66,7 +66,43 @@ rne queue --dvd /path/to/file.mkv     # treat source as DVD (forces detelecine p
 
 The `--dvd` flag is only needed when the source codec isn't `mpeg2video` — for genuine DVD rips the flag is usually redundant, but it's there as an override.
 
+When queuing a single TV file, the CLI also asks whether it is a multi-episode disc (see below).
+
 Source files are never moved or copied. Do not move or delete them until encoding completes.
+
+### Multi-episode discs
+
+Some discs (common in anime releases) pack all episodes into a single title using chapters rather than separate titles. When you select exactly one TV title — in either `rne ingest` or `rne queue` — the CLI asks:
+
+```
+Is this a multi-episode disc file (split by chapters)? [y/N]
+```
+
+If yes, after the probe and encoding config prompts you'll see the chapter table and an episode-length prompt:
+
+```
+  Total chapters : 12
+  Total duration : 1:52:30
+
+Episode length (minutes) [24]:
+```
+
+The tool auto-detects episode boundaries by grouping chapters until their combined duration is close to the target. Short chapters (OP/ED sequences, previews) are absorbed naturally into adjacent episodes. It then shows the proposed split and lets you adjust before committing:
+
+```
+  Ep      Chapters  Duration
+   1           1-2    24:15
+   2           3-4    23:45
+   ...
+
+  [a] Accept
+  [r] Re-split with a different episode length
+  [f] Re-split with fixed chapters per episode
+  [m] Manually enter chapter ranges
+  [q] Quit
+```
+
+Each accepted episode becomes a separate encode job in the queue. All jobs share the same source file; HandBrake's `--chapters` flag handles the splitting at encode time. No temporary files are created.
 
 ### Check queue status
 

@@ -10,6 +10,7 @@ from rne.cli._pipeline import (
     insert_jobs,
     preview_and_confirm,
     probe_and_display,
+    prompt_disc_split,
     prompt_encoding_config,
     prompt_metadata,
 )
@@ -156,10 +157,14 @@ def run(args) -> None:
 
     # ---- Step 3: content classification and naming -----------------------------
     print()
-    is_tv, show, season, first_ep, movie = prompt_metadata(volume_name, len(selected_indexes))
+    is_tv, show, season, first_ep, movie, is_disc_split = prompt_metadata(
+        volume_name,
+        len(selected_indexes),
+        single_file_tv=(len(selected_indexes) == 1),
+    )
 
     episodes: list[int] | None = None
-    if is_tv:
+    if is_tv and not is_disc_split:
         episodes = list(range(first_ep, first_ep + len(selected_indexes)))  # type: ignore[arg-type]
 
     # ---- Step 4: staging dir confirm, create batch row, rip per title ----------
@@ -219,7 +224,7 @@ def run(args) -> None:
         sys.exit(1)
 
     surviving_episodes: list[int] | None = None
-    if is_tv:
+    if is_tv and not is_disc_split:
         episode_by_idx = dict(zip(selected_indexes, episodes))  # type: ignore[arg-type]
         surviving_episodes = [episode_by_idx[ti] for ti, _ in rip_manifest]
 
@@ -232,19 +237,36 @@ def run(args) -> None:
     hb_args = prompt_encoding_config(stream_summary)
 
     # ---- Step 7: preview, mismatch detection, edit, confirm --------------------
-    jobs_plan = _build_jobs_plan(
-        is_tv=is_tv,
-        show=show,
-        season=season,
-        episodes=surviving_episodes,
-        movie=movie,
-        staging_dir=staging_dir,
-        rip_manifest=rip_manifest,
-        hb_args=hb_args,
-    )
-
-    remaining_paths = [fp for _, fp in rip_manifest[1:]]
-    jobs_plan = preview_and_confirm(jobs_plan, stream_summary, remaining_paths)
+    if is_disc_split:
+        from rne import probe as probe_mod
+        try:
+            chapters = probe_mod.probe_chapters(str(first_source))
+        except Exception as exc:
+            print(f"Chapter probe failed: {exc}", file=sys.stderr)
+            sys.exit(1)
+        jobs_plan = prompt_disc_split(
+            source_path=first_source,
+            chapters=chapters,
+            start_ep=first_ep,  # type: ignore[arg-type]
+            show=show,  # type: ignore[arg-type]
+            season=season,  # type: ignore[arg-type]
+            staging_dir=staging_dir,
+            hb_args=hb_args,
+        )
+        jobs_plan = preview_and_confirm(jobs_plan, stream_summary, [])
+    else:
+        jobs_plan = _build_jobs_plan(
+            is_tv=is_tv,
+            show=show,
+            season=season,
+            episodes=surviving_episodes,
+            movie=movie,
+            staging_dir=staging_dir,
+            rip_manifest=rip_manifest,
+            hb_args=hb_args,
+        )
+        remaining_paths = [fp for _, fp in rip_manifest[1:]]
+        jobs_plan = preview_and_confirm(jobs_plan, stream_summary, remaining_paths)
 
     # ---- Step 8: insert and exit -----------------------------------------------
     insert_jobs(conn, batch_id, jobs_plan)

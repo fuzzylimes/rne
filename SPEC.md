@@ -193,9 +193,13 @@ Stored as JSON, not a pre-rendered shell command. The worker re-renders the Hand
   "detelecine": false,
   "decomb": false,
   "tune": null,
-  "extra_args": []
+  "extra_args": [],
+  "chapter_start": 3,
+  "chapter_end": 5
 }
 ```
+
+`chapter_start` and `chapter_end` are **optional** 1-based chapter indexes (inclusive). When both are present, the HandBrake command includes `--chapters {start}-{end}`, encoding only that chapter range from the source file. Used by multi-episode disc mode (see below) where multiple TV episodes are packed into a single source MKV and split at encode time — each job in the split references the same `source_path` but a different chapter range. These keys are **omitted entirely** (not set to `null`) for jobs that encode the full source file, preserving backward compatibility with existing rows.
 
 `audio_tracks` is a list of per-track objects, not a list of indexes. Each entry carries its own copy/transcode decision so a single ingest can mix copied and transcoded tracks (the common Blu-ray case: copy the AC3 stereo track, transcode the TrueHD 5.1 to AC3 5.1). `audio_tracks` list order is preserved verbatim through to the HandBrake command. The first entry becomes the default audio track at playback time. Order entries by user preference, not by source stream index.
 
@@ -263,6 +267,10 @@ See "Path resolution" above.
 
 Same prompts as `rne ingest` step 3. The default name hint is the directory basename (directory mode) or the filename stem (single-file mode) — often garbage but sometimes useful, same UX as the disc-volume-name default in ingest.
 
+### Step 2a — Multi-episode disc detection (TV, single file only)
+
+Same as `rne ingest` step 3a. When content type is TV and the resolved manifest contains exactly one file, the CLI asks whether it is a multi-episode disc. If yes, the disc-split flow runs after the probe and encoding config steps, in place of the normal job-plan and preview steps.
+
 ### Step 3 — Create `ingest_batches` row
 
 Label is derived from the metadata with a " (queued)" suffix (e.g., "Full Metal Panic S01 (queued)"). `notes` is set to `f"Queued from {path.absolute()}"` as the paper trail. **No filesystem directory is created** — there is no `_raw/batch-N/` for queued jobs.
@@ -309,7 +317,8 @@ rne/
     │   └── rne-dashboard.service
     ├── cli/
     │   ├── __init__.py      # argparse dispatcher
-    │   ├── _pipeline.py     # shared helpers (probe display, encoding config, preview, DB ops)
+    │   ├── _pipeline.py     # shared helpers (probe display, encoding config, preview, DB ops, disc-split flow)
+    │   ├── disc_split.py    # chapter grouping algorithms for multi-episode disc mode
     │   ├── ingest.py        # disc-to-queue interactive flow
     │   ├── queue.py         # queue already-ripped .mkv files
     │   ├── ls.py
@@ -337,8 +346,9 @@ rne/
 - **`db.py`** — owns everything sqlite. Schema as a `SCHEMA_SQL` constant, `init_db()` that runs it idempotently, `connect()` that applies pragmas. Thin functions like `claim_next_job()`, `update_progress(...)`, `mark_done(...)`. No ORM. `sqlite3.Row` row factory. One-off queries can stay inline at the call site.
 - **`models.py`** — dataclasses mirroring the columns, with `from_row(row)` classmethods. `JobStatus` is a `StrEnum`. `HandbrakeArgs` and the nested `AudioTrack` dataclass with `to_json()` / `from_json()`.
 - **`handbrake.py`** — pure. Takes a `HandbrakeArgs` and source path, returns `["HandBrakeCLI", "-i", ...]`. No subprocess, no DB, no I/O. The flatpak prefix from `config.py` is prepended here. Validates `AudioTrack` entries: bitrate required when codec != "copy", rejected when codec == "copy". `source_path` may point outside `/mnt/media/staging/` for jobs created via `rne queue` — this is valid and expected.
-- **`cli/_pipeline.py`** — shared interactive pipeline helpers used by both `ingest.py` and `queue.py`: probe-table display, `build_preview`, mismatch detection, `prompt_metadata`, `prompt_encoding_config`, `preview_and_confirm`, `create_batch_row`, `insert_jobs`, and the `$EDITOR` round-trip.
-- **`probe.py`** — port of `mkvprobe-format.py`. `summarize(mkv_path) → StreamSummary`. The `AudioStream` summary includes `codec`, `channels`, `bitrate`, `language`, `title`, `default`, `forced`. The table-printing logic moves into `cli/ingest.py`.
+- **`cli/_pipeline.py`** — shared interactive pipeline helpers used by both `ingest.py` and `queue.py`: probe-table display, `build_preview`, mismatch detection, `prompt_metadata`, `prompt_encoding_config`, `preview_and_confirm`, `create_batch_row`, `insert_jobs`, the `$EDITOR` round-trip, and the disc-split interactive flow (`prompt_disc_split`, `_disc_split_confirm_loop`, `_build_disc_split_jobs`).
+- **`cli/disc_split.py`** — pure algorithmic module (no I/O) for multi-episode disc splitting: `Episode` dataclass, `autodetect` (greedy ±35% duration grouping), `groups_to_episodes`, `fixed_split`, `manual_entry`.
+- **`probe.py`** — port of `mkvprobe-format.py`. `summarize(mkv_path) → StreamSummary`. The `AudioStream` summary includes `codec`, `channels`, `bitrate`, `language`, `title`, `default`, `forced`. Also provides `Chapter` dataclass and `probe_chapters(mkv_path)` for multi-episode disc mode. The table-printing logic moves into `cli/ingest.py`.
 - **`makemkv.py`** — port of `mkvrip`'s parser (the `parse_info`, `summarize`, `parse_index_spec` functions). The interactive prompting moves into `cli/ingest.py`.
 - **`worker/runner.py`** — `subprocess.Popen` of HandBrake, parses progress, captures stderr ring buffer, handles `.partial` rename.
 - **`worker/daemon.py`** — main loop. Reconcile orphans → loop forever: check pause, claim, run, repeat.
@@ -456,6 +466,45 @@ Confirm? [Y/n]
 The confirmation matters: "starting episode wrong" is the most common ingest mistake. Catching it here is much cheaper than discovering it after 8 hours of encoding.
 
 If Movie: prompt for the title, same default-from-disc behavior. One job, no episode numbers.
+
+### Step 3a — Multi-episode disc detection (TV, single title only)
+
+Some discs — common in anime releases — pack an entire disc's worth of episodes into a single title, using chapters to delineate individual episodes rather than using separate titles. When the user selects exactly **one** title and content type is **TV**, the CLI asks:
+
+```
+Is this a multi-episode disc file (split by chapters)? [y/N]
+```
+
+If **no** (default), the flow continues normally through steps 4–8. If **yes**, the episode list is not computed in step 3; instead, after the rip (step 4), probe (step 5), and encoding config (step 6), the disc-split flow runs in place of the normal step 7:
+
+**Disc-split flow (replaces step 7 when active):**
+
+1. Run `ffprobe -show_chapters` on the ripped file to collect chapter metadata — number, start time, end time, title.
+2. Print a chapter table with running totals, then prompt for the target episode length:
+   ```
+     #  Title                Duration   Running
+     1  Chapter 01              23:45     23:45
+     2  Chapter 02               1:30     25:15
+     3  Chapter 03              22:00     47:15
+   ...
+   Episode length (minutes) [24]:
+   ```
+3. Auto-detect episode boundaries using a greedy accumulator: chapters are grouped until their combined duration falls within ±35% of the target. Short chapters (OP sequences, ED credits, preview clips — typically 90 seconds or less) are naturally absorbed into the nearest episode group because they never reach the low threshold on their own. Any leftover chapters at the end are folded into the final episode.
+4. Show the proposed split and enter a confirmation loop:
+   ```
+     Ep      Chapters  Duration
+      1           1-1    23:45
+      2           2-2    22:00
+   ...
+     [a] Accept
+     [r] Re-split with a different episode length
+     [f] Re-split with fixed chapters per episode
+     [m] Manually enter chapter ranges
+     [q] Quit
+   ```
+5. On accept, produce one job per episode. All jobs share the same `source_path` (the single ripped file). Each job's `handbrake_args` carries the per-episode `chapter_start` and `chapter_end` range; HandBrake's `--chapters` flag encodes only that range. Output filenames follow the normal TV template (`S{season:02d}E{episode:02d}`), numbered from the first episode entered in step 3.
+
+No database schema change is required. Chapter range data is stored in the existing `handbrake_args` JSON column.
 
 ### Step 4 — Staging dir confirm and rip
 
