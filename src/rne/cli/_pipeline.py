@@ -210,24 +210,34 @@ def prompt_metadata(
     name_hint: str,
     num_files: int,
     single_file_tv: bool = False,
+    *,
+    name: str | None = None,
+    season: int | None = None,
+    first_ep: int | None = None,
 ) -> tuple[bool, str | None, int | None, int | None, str | None, bool]:
     """Prompt for content type and naming.
+
+    name, season, and first_ep are optional pre-supplied values (CLI flags);
+    any that are provided skip their prompt. Providing season or first_ep
+    implies TV episodes and skips the content-type prompt.
 
     Returns (is_tv, show, season, first_episode, movie, is_disc_split).
     is_disc_split is True only when single_file_tv=True and the user
     confirms the disc contains multiple episodes in a single file.
     Calls sys.exit(0) if the user aborts.
     """
-    print("What type of content is this?")
-    print("  [1] TV episodes")
-    print("  [2] Movie")
-    while True:
-        choice = input("> ").strip()
-        if choice in ("1", "2"):
-            break
-        print("Please enter 1 or 2.", file=sys.stderr)
-
-    is_tv = choice == "1"
+    if season is not None or first_ep is not None:
+        is_tv = True
+    else:
+        print("What type of content is this?")
+        print("  [1] TV episodes")
+        print("  [2] Movie")
+        while True:
+            choice = input("> ").strip()
+            if choice in ("1", "2"):
+                break
+            print("Please enter 1 or 2.", file=sys.stderr)
+        is_tv = choice == "1"
 
     if is_tv:
         is_disc_split = False
@@ -237,21 +247,26 @@ def prompt_metadata(
                 default=False,
             )
 
-        show = mungefilename(prompts.prompt_with_default("Show", name_hint))
+        if name is not None:
+            show = mungefilename(name)
+        else:
+            show = mungefilename(prompts.prompt_with_default("Show", name_hint))
 
-        while True:
+        while season is None:
             try:
-                season = int(input("Season: ").strip())
-                if season >= 0:
+                candidate = int(input("Season: ").strip())
+                if candidate >= 0:
+                    season = candidate
                     break
             except ValueError:
                 pass
             print("Please enter a positive integer or 0 for special.", file=sys.stderr)
 
-        while True:
+        while first_ep is None:
             try:
-                first_ep = int(input("First episode number: ").strip())
-                if first_ep > 0:
+                candidate = int(input("First episode number: ").strip())
+                if candidate > 0:
+                    first_ep = candidate
                     break
             except ValueError:
                 pass
@@ -268,8 +283,11 @@ def prompt_metadata(
 
         return True, show, season, first_ep, None, is_disc_split
     else:
-        movie = mungefilename(
-            prompts.prompt_with_default("Movie title", name_hint))
+        if name is not None:
+            movie = mungefilename(name)
+        else:
+            movie = mungefilename(
+                prompts.prompt_with_default("Movie title", name_hint))
         return False, None, None, None, movie, False
 
 
@@ -399,6 +417,10 @@ def prompt_encoding_config(
                 print("Please enter a number.", file=sys.stderr)
 
     # d. CRF, preset, animation tune, decomb
+    is_dvd_source = is_dvd or (
+        bool(stream_summary.video) and stream_summary.video[0].codec == "mpeg2video"
+    )
+
     crf_str = prompts.prompt_with_default(
         "Quality (CRF)", str(config.DEFAULT_QUALITY))
     try:
@@ -410,15 +432,16 @@ def prompt_encoding_config(
         )
         crf = config.DEFAULT_QUALITY
 
-    preset = prompts.prompt_with_default("Preset", config.DEFAULT_PRESET)
+    # DVDs default to a faster preset; Blu-rays keep the slower default.
+    default_preset = (
+        config.DEFAULT_PRESET_DVD if is_dvd_source else config.DEFAULT_PRESET
+    )
+    preset = prompts.prompt_with_default("Preset", default_preset)
 
     tune: str | None = config.DEFAULT_TUNE
     if prompts.prompt_yes_no("Animation source?", default=False):
         tune = "animation"
 
-    is_dvd_source = is_dvd or (
-        bool(stream_summary.video) and stream_summary.video[0].codec == "mpeg2video"
-    )
     detelecine = False
     if is_dvd_source and stream_summary.video:
         try:

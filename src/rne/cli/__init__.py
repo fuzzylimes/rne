@@ -3,6 +3,26 @@ from __future__ import annotations
 import argparse
 
 
+def _season_number(value: str) -> int:
+    try:
+        n = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid season number: {value!r}")
+    if n < 0:
+        raise argparse.ArgumentTypeError("season must be 0 or greater")
+    return n
+
+
+def _episode_number(value: str) -> int:
+    try:
+        n = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid episode number: {value!r}")
+    if n < 1:
+        raise argparse.ArgumentTypeError("first episode must be 1 or greater")
+    return n
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="rne",
@@ -17,6 +37,23 @@ def _build_parser() -> argparse.ArgumentParser:
         default=900,
         metavar="SECONDS",
         help="Minimum title length in seconds (default: 900)",
+    )
+    ingest_p.add_argument(
+        "-n", "--name",
+        metavar="NAME",
+        help="Show/movie name (skips the name prompt)",
+    )
+    ingest_p.add_argument(
+        "-sn", "--season",
+        type=_season_number,
+        metavar="N",
+        help="Season number (TV only; implies TV, skips the content-type prompt)",
+    )
+    ingest_p.add_argument(
+        "-fe", "--first-episode",
+        type=_episode_number,
+        metavar="N",
+        help="First episode number (TV only; implies TV, skips the content-type prompt)",
     )
 
     queue_p = sub.add_parser(

@@ -40,14 +40,14 @@ On the Mac (build machine):
 
 ```bash
 uv build
-# Produces dist/rne-0.1.0-py3-none-any.whl
-rsync -av dist/rne-0.1.0-py3-none-any.whl rip@rip.lan:~/
+# Produces dist/rne-0.2.1-py3-none-any.whl
+rsync -av dist/rne-0.2.1-py3-none-any.whl rip@rip.lan:~/
 ```
 
 On the VM:
 
 ```bash
-pipx install ~/rne-0.1.0-py3-none-any.whl
+pipx install ~/rne-0.2.1-py3-none-any.whl
 ```
 
 Verify all three entry points landed in `~/.local/bin/`:

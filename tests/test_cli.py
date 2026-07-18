@@ -539,6 +539,46 @@ def test_parser_ingest():
     assert args.command == "ingest"
 
 
+def test_parser_ingest_metadata_defaults_none():
+    args = _build_parser().parse_args(["ingest"])
+    assert args.name is None
+    assert args.season is None
+    assert args.first_episode is None
+
+
+def test_parser_ingest_name_short_and_long():
+    args = _build_parser().parse_args(["ingest", "-n", "Initial D"])
+    assert args.name == "Initial D"
+    args = _build_parser().parse_args(["ingest", "--name", "Initial D"])
+    assert args.name == "Initial D"
+
+
+def test_parser_ingest_season_and_first_episode():
+    args = _build_parser().parse_args(["ingest", "-sn", "1", "-fe", "5"])
+    assert args.season == 1
+    assert args.first_episode == 5
+
+
+def test_parser_ingest_season_zero_allowed():
+    args = _build_parser().parse_args(["ingest", "-sn", "0"])
+    assert args.season == 0
+
+
+def test_parser_ingest_negative_season_rejected():
+    with pytest.raises(SystemExit):
+        _build_parser().parse_args(["ingest", "-sn", "-1"])
+
+
+def test_parser_ingest_zero_first_episode_rejected():
+    with pytest.raises(SystemExit):
+        _build_parser().parse_args(["ingest", "-fe", "0"])
+
+
+def test_parser_ingest_non_numeric_season_rejected():
+    with pytest.raises(SystemExit):
+        _build_parser().parse_args(["ingest", "-sn", "one"])
+
+
 def test_parser_ls_defaults():
     args = _build_parser().parse_args(["ls"])
     assert args.command == "ls"
@@ -869,3 +909,282 @@ def test_subtitle_default_second_selection():
     assert subtitle_tracks[0].default is False
     assert subtitle_tracks[1].track == 1
     assert subtitle_tracks[1].default is True
+
+
+# ---------------------------------------------------------------------------
+# prompt_metadata — pre-supplied name/season/first_ep (ingest flags)
+# ---------------------------------------------------------------------------
+
+from rne.cli._pipeline import prompt_metadata  # noqa: E402
+
+
+def test_prompt_metadata_all_provided_only_confirms():
+    # name + season + first_ep provided → only the episode-preview confirm fires.
+    with patch("builtins.input", side_effect=[""]):  # Confirm? [Y/n] → default Y
+        result = prompt_metadata(
+            "VOLUME", 2, name="Initial D", season=1, first_ep=5
+        )
+    assert result == (True, "Initial D", 1, 5, None, False)
+
+
+def test_prompt_metadata_season_implies_tv():
+    # Only season provided → no content-type prompt; show and first-ep prompted.
+    with patch("builtins.input", side_effect=["My Show", "3", ""]):
+        result = prompt_metadata("VOLUME", 1, season=2)
+    assert result == (True, "My Show", 2, 3, None, False)
+
+
+def test_prompt_metadata_first_ep_implies_tv():
+    # Only first_ep provided → no content-type prompt; show and season prompted.
+    with patch("builtins.input", side_effect=["My Show", "0", ""]):
+        result = prompt_metadata("VOLUME", 1, first_ep=4)
+    assert result == (True, "My Show", 0, 4, None, False)
+
+
+def test_prompt_metadata_name_only_still_asks_type_movie():
+    # Name alone doesn't imply TV; type prompt fires, movie name comes from flag.
+    with patch("builtins.input", side_effect=["2"]):
+        result = prompt_metadata("VOLUME", 1, name="Aliens")
+    assert result == (False, None, None, None, "Aliens", False)
+
+
+def test_prompt_metadata_name_only_tv_prompts_season_and_episode():
+    with patch("builtins.input", side_effect=["1", "1", "5", ""]):
+        result = prompt_metadata("VOLUME", 2, name="Initial D")
+    assert result == (True, "Initial D", 1, 5, None, False)
+
+
+def test_prompt_metadata_provided_name_is_munged():
+    with patch("builtins.input", side_effect=["2"]):
+        result = prompt_metadata("VOLUME", 1, name="Star Wars: A New Hope")
+    assert result[4] == "Star Wars A New Hope"
+
+
+def test_prompt_metadata_flags_still_ask_disc_split():
+    # season/first_ep provided with a single title → disc-split question still fires.
+    with patch("builtins.input", side_effect=["y"]):
+        result = prompt_metadata(
+            "VOLUME", 1, single_file_tv=True, name="Show", season=1, first_ep=1
+        )
+    assert result == (True, "Show", 1, 1, None, True)
+
+
+def test_prompt_metadata_no_flags_unchanged():
+    # Baseline: no flags → full prompt flow as before.
+    with patch("builtins.input", side_effect=["1", "Initial D", "1", "5", ""]):
+        result = prompt_metadata("VOLUME", 2)
+    assert result == (True, "Initial D", 1, 5, None, False)
+
+
+# ---------------------------------------------------------------------------
+# prompt_encoding_config — preset default by source type
+# ---------------------------------------------------------------------------
+
+from rne.cli._pipeline import prompt_encoding_config  # noqa: E402
+from rne.probe import VideoStream  # noqa: E402
+
+
+def _video(codec: str, fps: str = "23.976", field_order: str = "progressive") -> VideoStream:
+    return VideoStream(
+        codec=codec,
+        resolution="720x480",
+        fps=fps,
+        field_order=field_order,
+        lang="",
+        default=True,
+        forced=False,
+    )
+
+
+def test_encoding_config_dvd_defaults_to_medium_preset():
+    summary = StreamSummary(
+        video=[_video("mpeg2video", fps="29.97")],
+        audio=[_stream("ac3", 6)],
+        subtitle=[],
+    )
+    with patch("builtins.input", return_value=""):
+        hb = prompt_encoding_config(summary)
+    assert hb.preset == "medium"
+
+
+def test_encoding_config_bluray_defaults_to_slow_preset():
+    summary = StreamSummary(
+        video=[_video("h264", fps="23.976")],
+        audio=[_stream("ac3", 6)],
+        subtitle=[],
+    )
+    with patch("builtins.input", return_value=""):
+        hb = prompt_encoding_config(summary)
+    assert hb.preset == "slow"
+
+
+def test_encoding_config_dvd_flag_defaults_to_medium_preset():
+    # --dvd flag on rne queue forces DVD treatment regardless of codec.
+    summary = StreamSummary(
+        video=[_video("h264", fps="29.97")],
+        audio=[_stream("ac3", 6)],
+        subtitle=[],
+    )
+    with patch("builtins.input", return_value=""):
+        hb = prompt_encoding_config(summary, is_dvd=True)
+    assert hb.preset == "medium"
+
+
+def test_encoding_config_explicit_preset_overrides_dvd_default():
+    summary = StreamSummary(
+        video=[_video("mpeg2video", fps="29.97")],
+        audio=[_stream("ac3", 6)],
+        subtitle=[],
+    )
+    # audio [], crf, preset=veryslow, animation, detelecine, decomb
+    with patch("builtins.input", side_effect=["", "", "veryslow", "", "", ""]):
+        hb = prompt_encoding_config(summary)
+    assert hb.preset == "veryslow"
+
+
+# ---------------------------------------------------------------------------
+# _rip_title_with_retries
+# ---------------------------------------------------------------------------
+
+import subprocess  # noqa: E402
+
+from rne.cli.ingest import _rip_title_with_retries  # noqa: E402
+from rne.makemkv import MakemkvError  # noqa: E402
+
+_RIPPED = pathlib.Path("/staging/_raw/batch-1/title_t00.mkv")
+
+
+def _rip_kwargs() -> dict:
+    return {
+        "disc": 0,
+        "raw_dir": pathlib.Path("/staging/_raw/batch-1"),
+        "minlength": 900,
+    }
+
+
+def test_rip_retries_success_first_try():
+    with patch("rne.cli.ingest.makemkv.rip_and_detect", return_value=_RIPPED):
+        with patch("builtins.input", side_effect=AssertionError("no prompt expected")):
+            result = _rip_title_with_retries(2, auto_retries=1, **_rip_kwargs())
+    assert result == _RIPPED
+
+
+def test_rip_retries_auto_retry_recovers_without_prompt():
+    with patch(
+        "rne.cli.ingest.makemkv.rip_and_detect",
+        side_effect=[MakemkvError("boom"), _RIPPED],
+    ) as rip:
+        with patch("builtins.input", side_effect=AssertionError("no prompt expected")):
+            result = _rip_title_with_retries(2, auto_retries=1, **_rip_kwargs())
+    assert result == _RIPPED
+    assert rip.call_count == 2
+
+
+def test_rip_retries_handles_called_process_error():
+    with patch(
+        "rne.cli.ingest.makemkv.rip_and_detect",
+        side_effect=[subprocess.CalledProcessError(1, ["makemkvcon"]), _RIPPED],
+    ):
+        with patch("builtins.input", side_effect=AssertionError("no prompt expected")):
+            result = _rip_title_with_retries(2, auto_retries=1, **_rip_kwargs())
+    assert result == _RIPPED
+
+
+def test_rip_retries_exhausted_then_skip_returns_none():
+    with patch(
+        "rne.cli.ingest.makemkv.rip_and_detect",
+        side_effect=MakemkvError("boom"),
+    ) as rip:
+        with patch("builtins.input", side_effect=["s"]):
+            result = _rip_title_with_retries(2, auto_retries=1, **_rip_kwargs())
+    assert result is None
+    assert rip.call_count == 2  # initial + 1 auto retry
+
+
+def test_rip_retries_exhausted_then_abort_exits():
+    with patch(
+        "rne.cli.ingest.makemkv.rip_and_detect",
+        side_effect=MakemkvError("boom"),
+    ):
+        with patch("builtins.input", side_effect=["a"]):
+            with pytest.raises(SystemExit) as exc_info:
+                _rip_title_with_retries(2, auto_retries=0, **_rip_kwargs())
+    assert exc_info.value.code == 1
+
+
+def test_rip_retries_manual_retry_recovers():
+    with patch(
+        "rne.cli.ingest.makemkv.rip_and_detect",
+        side_effect=[MakemkvError("boom"), _RIPPED],
+    ):
+        with patch("builtins.input", side_effect=["r"]):
+            result = _rip_title_with_retries(2, auto_retries=0, **_rip_kwargs())
+    assert result == _RIPPED
+
+
+def test_rip_retries_manual_retry_fails_prompts_again():
+    with patch(
+        "rne.cli.ingest.makemkv.rip_and_detect",
+        side_effect=[MakemkvError("boom"), MakemkvError("boom"), _RIPPED],
+    ):
+        with patch("builtins.input", side_effect=["r", "r"]):
+            result = _rip_title_with_retries(2, auto_retries=0, **_rip_kwargs())
+    assert result == _RIPPED
+
+
+def test_rip_retries_zero_auto_retries_prompts_immediately():
+    with patch(
+        "rne.cli.ingest.makemkv.rip_and_detect",
+        side_effect=MakemkvError("boom"),
+    ) as rip:
+        with patch("builtins.input", side_effect=["s"]):
+            result = _rip_title_with_retries(2, auto_retries=0, **_rip_kwargs())
+    assert result is None
+    assert rip.call_count == 1
+
+
+def test_rip_retries_invalid_choice_reprompts():
+    with patch(
+        "rne.cli.ingest.makemkv.rip_and_detect",
+        side_effect=MakemkvError("boom"),
+    ):
+        with patch("builtins.input", side_effect=["x", "s"]):
+            result = _rip_title_with_retries(2, auto_retries=0, **_rip_kwargs())
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
+# config._rip_retries — RNE_RIP_RETRIES parsing and clamping
+# ---------------------------------------------------------------------------
+
+from rne.config import _rip_retries  # noqa: E402
+
+
+def test_rip_retries_default_is_one(monkeypatch):
+    monkeypatch.delenv("RNE_RIP_RETRIES", raising=False)
+    assert _rip_retries() == 1
+
+
+def test_rip_retries_env_override(monkeypatch):
+    monkeypatch.setenv("RNE_RIP_RETRIES", "5")
+    assert _rip_retries() == 5
+
+
+def test_rip_retries_zero_allowed(monkeypatch):
+    monkeypatch.setenv("RNE_RIP_RETRIES", "0")
+    assert _rip_retries() == 0
+
+
+def test_rip_retries_clamped_to_ten(monkeypatch):
+    monkeypatch.setenv("RNE_RIP_RETRIES", "50")
+    assert _rip_retries() == 10
+
+
+def test_rip_retries_negative_clamped_to_zero(monkeypatch):
+    monkeypatch.setenv("RNE_RIP_RETRIES", "-3")
+    assert _rip_retries() == 0
+
+
+def test_rip_retries_non_numeric_falls_back_to_default(monkeypatch):
+    monkeypatch.setenv("RNE_RIP_RETRIES", "lots")
+    assert _rip_retries() == 1

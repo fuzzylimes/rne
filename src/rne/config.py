@@ -15,8 +15,25 @@ HANDBRAKE_PREFIX = ["flatpak", "run", "--command=HandBrakeCLI", "fr.handbrake.gh
 DEFAULT_ENCODER = "x265"
 DEFAULT_QUALITY = 20
 DEFAULT_PRESET = "slow"
+# DVD sources encode fast enough that "slow" buys little; default to "medium".
+DEFAULT_PRESET_DVD = "medium"
 DEFAULT_TUNE: str | None = None
 DEFAULT_AUDIO_CODEC = "copy"
+
+
+def _rip_retries() -> int:
+    """Automatic retries when ripping a title fails (RNE_RIP_RETRIES env var).
+
+    Default 1; clamped to 0-10.
+    """
+    try:
+        value = int(os.environ.get("RNE_RIP_RETRIES", "1"))
+    except ValueError:
+        return 1
+    return max(0, min(value, 10))
+
+
+RIP_RETRIES: int = _rip_retries()
 
 FFPROBE_TIMEOUT = 60  # standard probe only; rne probe --deep has no timeout
 

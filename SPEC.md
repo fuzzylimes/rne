@@ -265,7 +265,7 @@ See "Path resolution" above.
 
 ### Step 2 — Content classification and naming
 
-Same prompts as `rne ingest` step 3. The default name hint is the directory basename (directory mode) or the filename stem (single-file mode) — often garbage but sometimes useful, same UX as the disc-volume-name default in ingest.
+Same prompts as `rne ingest` step 3 (the `-n`/`-sn`/`-fe` metadata flags are ingest-only and not accepted by `rne queue`). The default name hint is the directory basename (directory mode) or the filename stem (single-file mode) — often garbage but sometimes useful, same UX as the disc-volume-name default in ingest.
 
 ### Step 2a — Multi-episode disc detection (TV, single file only)
 
@@ -342,7 +342,7 @@ rne/
 
 ### Module ownership
 
-- **`config.py`** — flat module of constants. Things like `DB_PATH`, `STAGING_ROOT`, `MEDIA_ROOT`, default minlength, default ffprobe timeout, the flatpak HandBrake invocation prefix, `COPY_FRIENDLY_AUDIO_CODECS`, `AC3_BITRATE_BY_CHANNELS`. Override via env vars where appropriate. Not pydantic, not yaml. When the project grows past 10 settings, revisit.
+- **`config.py`** — flat module of constants. Things like `DB_PATH`, `STAGING_ROOT`, `MEDIA_ROOT`, default minlength, default ffprobe timeout, the flatpak HandBrake invocation prefix, `COPY_FRIENDLY_AUDIO_CODECS`, `AC3_BITRATE_BY_CHANNELS`, `DEFAULT_PRESET` / `DEFAULT_PRESET_DVD`, `RIP_RETRIES` (env `RNE_RIP_RETRIES`). Override via env vars where appropriate. Not pydantic, not yaml. When the project grows past 10 settings, revisit.
 - **`db.py`** — owns everything sqlite. Schema as a `SCHEMA_SQL` constant, `init_db()` that runs it idempotently, `connect()` that applies pragmas. Thin functions like `claim_next_job()`, `update_progress(...)`, `mark_done(...)`. No ORM. `sqlite3.Row` row factory. One-off queries can stay inline at the call site.
 - **`models.py`** — dataclasses mirroring the columns, with `from_row(row)` classmethods. `JobStatus` is a `StrEnum`. `HandbrakeArgs` and the nested `AudioTrack` dataclass with `to_json()` / `from_json()`.
 - **`handbrake.py`** — pure. Takes a `HandbrakeArgs` and source path, returns `["HandBrakeCLI", "-i", ...]`. No subprocess, no DB, no I/O. The flatpak prefix from `config.py` is prepended here. Validates `AudioTrack` entries: bitrate required when codec != "copy", rejected when codec == "copy". `source_path` may point outside `/mnt/media/staging/` for jobs created via `rne queue` — this is valid and expected.
@@ -361,7 +361,7 @@ rne/
 ```toml
 [project]
 name = "rne"
-version = "0.1.0"
+version = "0.2.1"
 requires-python = ">=3.12"
 dependencies = ["flask>=3.0"]
 
@@ -465,6 +465,14 @@ Confirm? [Y/n]
 
 The confirmation matters: "starting episode wrong" is the most common ingest mistake. Catching it here is much cheaper than discovering it after 8 hours of encoding.
 
+Metadata can be pre-supplied via CLI flags, skipping the corresponding prompts:
+
+- `-n` / `--name` — show or movie name.
+- `-sn` / `--season` — season number (0 for specials). TV only.
+- `-fe` / `--first-episode` — first episode number. TV only.
+
+Providing `-sn` or `-fe` implies TV episodes, so the content-type prompt is skipped (`-n` alone does not — it fills the name for whichever type is chosen). Values not provided are still prompted for. When name, season, and first episode are all given, the only remaining metadata interaction is the `→ titles will be ...` confirmation. The multi-episode disc question (step 3a) is unaffected by these flags and is still asked when it applies. Flag values pass through the same `mungefilename` sanitization as prompted input; season/episode values are validated by argparse (season ≥ 0, first episode ≥ 1).
+
 If Movie: prompt for the title, same default-from-disc behavior. One job, no episode numbers.
 
 ### Step 3a — Multi-episode disc detection (TV, single title only)
@@ -530,13 +538,13 @@ b. Run `makemkvcon --minlength=<N> mkv` for this title, using the **same `--minl
 c. Snapshot `after = set(raw_dir.glob("*.mkv"))`. Compute `new = after - before`. If `len(new) != 1`, abort with a clear error showing what is in the dir.
 d. Append `(title_idx, new_file_path)` to the **rip manifest** — an in-memory ordered list of `(title_idx, Path)` pairs that maps disc-title order to actual filenames.
 
-If a rip fails (non-zero exit), prompt:
+If a rip fails (non-zero exit or unexpected output), it is retried automatically up to `RIP_RETRIES` times (default 1, `RNE_RIP_RETRIES` env var, clamped to 0–10). Once automatic retries are exhausted, prompt:
 
 ```
-Title 5 failed. Abort the whole ingest, or skip and continue? [a/s]
+Title 5 failed. Abort the whole ingest, retry the title, or skip and continue? [a/r/s]
 ```
 
-Never silently queue a partial batch.
+`r` re-attempts the rip once; if it fails again the same prompt reappears (automatic retries do not reset). Never silently queue a partial batch.
 
 The rip manifest is the authoritative record of which file belongs to which title. Raw filenames are whatever makemkv produces — the only assumption rne makes is that exactly one new `*.mkv` file appears per rip.
 
@@ -594,6 +602,7 @@ Other notes:
 - **For MKV output, `--audio-fallback` is meaningless.** MKV holds any codec. Track-level codec is the real decision.
 - **Detelecine prompt appears only for DVD + NTSC frame rates.** The source is identified as DVD when the video codec is `mpeg2video` (always the case for genuine DVD rips) or when `--dvd` is passed to `rne queue`. The frame rate must be in the range 28–31 fps to cover NTSC variants (29.97 fps is the standard NTSC DVD rate). Default is **Y** — detelecine should be on for NTSC DVDs. `--detelecine` is emitted in the HandBrake command before `--decomb`.
 - **Decomb prompt always appears for DVD sources**, defaulting to **Y**. For non-DVD sources (Blu-ray), it only appears when the field order is interlaced, defaulting to N.
+- **Preset default depends on the source type.** DVD sources (same identification as the detelecine prompt: `mpeg2video` codec or `--dvd`) default to `DEFAULT_PRESET_DVD` (`medium`); everything else (Blu-ray) defaults to `DEFAULT_PRESET` (`slow`). The prompt sample above shows `Preset [slow]:`; for a DVD it reads `Preset [medium]:`.
 - All defaults come from `config.py`. Tune once, forget.
 
 ### Step 7 — Output preview, mismatch detection, edit, confirm

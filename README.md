@@ -17,10 +17,10 @@ See [docs/install.md](docs/install.md) for the full prerequisite checklist and s
 ```bash
 # Build on Mac, copy wheel to VM
 uv build
-rsync -av dist/rne-0.1.0-py3-none-any.whl rip@rip:~/
+rsync -av dist/rne-0.2.1-py3-none-any.whl rip@rip:~/
 
 # On VM: install and set up services
-pipx install ~/rne-0.1.0-py3-none-any.whl
+pipx install ~/rne-0.2.1-py3-none-any.whl
 rne service install
 loginctl enable-linger rip
 systemctl --user enable --now rne-worker rne-dashboard
@@ -44,6 +44,19 @@ The CLI walks through title detection, content classification (TV or movie), nam
 
 The `--minlength` / `-m` value is passed to both the title-listing and ripping steps so that title indices are always consistent between the two.
 
+Metadata can be pre-supplied on the command line to skip the corresponding prompts:
+
+```bash
+rne ingest -n "Initial D" -sn 1 -fe 5    # TV: show, season, first episode
+rne ingest -n "Aliens"                   # name only — content type still prompted
+```
+
+- `-n` / `--name` — show or movie name.
+- `-sn` / `--season` — season number (0 for specials). TV only.
+- `-fe` / `--first-episode` — first episode number. TV only.
+
+Providing `-sn` or `-fe` implies TV episodes, so the content-type prompt is skipped. Anything not provided is still prompted for. When all three are given, the only metadata prompt left is the `→ titles will be ...` confirmation.
+
 Example session flow:
 
 1. Title list from `makemkvcon -r --minlength=900 info disc:0` — sorted by `.mpls` source name so episodes appear in the correct order regardless of how the publisher arranged them on disc. The `#` column is the display index; `Disc Index` shows the underlying MakeMKV title number.
@@ -51,8 +64,14 @@ Example session flow:
 3. TV or Movie? → if TV with exactly one title selected, asks about multi-episode disc mode first (see below), then prompts for show/season/starting episode; if movie, prompts for title
 4. Confirm staging directory, then rip
 5. Probe of first file — shows video/audio/subtitle track table
-6. Audio tracks to encode, subtitle tracks, CRF quality, preset, detelecine (DVD + NTSC only), decomb
+6. Audio tracks to encode, subtitle tracks, CRF quality, preset, detelecine (DVD + NTSC only), decomb. The preset default is `medium` for DVD sources (`mpeg2video` codec or `--dvd` flag) and `slow` for everything else (Blu-rays)
 7. Preview of all queued jobs — confirm or edit before inserting
+
+If a title fails to rip, it is retried automatically (once by default — see `RNE_RIP_RETRIES` under Configuration). Once automatic retries are exhausted you are asked whether to abort the whole ingest, retry the title again, or skip it and continue:
+
+```
+Title 5 failed. Abort the whole ingest, retry the title, or skip and continue? [a/r/s]
+```
 
 ### Queue already-ripped files
 
@@ -141,6 +160,9 @@ Defaults live in `src/rne/config.py`. Key constants:
 | `RNE_DB` | `~/.local/state/rne/jobs.db` | Override with `RNE_DB` env var |
 | `COPY_FRIENDLY_AUDIO_CODECS` | `ac3, eac3, aac, mp3, opus` | Tracks with these codecs are copied; others trigger a transcode prompt |
 | `AC3_BITRATE_BY_CHANNELS` | 96/192/640 kbps | Recommended AC3 bitrate by channel count |
+| `DEFAULT_PRESET` | `slow` | Preset default for Blu-ray (non-DVD) sources |
+| `DEFAULT_PRESET_DVD` | `medium` | Preset default for DVD sources |
+| `RIP_RETRIES` | `1` | Automatic retries when a title rip fails; override with `RNE_RIP_RETRIES` env var (clamped to 0–10) |
 
 ## Output layout
 
@@ -175,7 +197,7 @@ Raw files are kept in `_raw/batch-{id}/` under the show/movie staging directory,
 uv sync             # install deps including dev group
 uv run pytest       # run tests
 uv run ruff check   # lint
-uv build            # build wheel → dist/rne-0.1.0-py3-none-any.whl
+uv build            # build wheel → dist/rne-0.2.1-py3-none-any.whl
 ```
 
 Tests use in-memory SQLite; no external binaries required.

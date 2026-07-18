@@ -106,6 +106,59 @@ def _build_jobs_plan(
 
 
 # ---------------------------------------------------------------------------
+# Rip with retries
+# ---------------------------------------------------------------------------
+
+
+def _rip_title_with_retries(
+    title_idx: int,
+    *,
+    disc: int,
+    raw_dir: pathlib.Path,
+    minlength: int,
+    auto_retries: int,
+) -> pathlib.Path | None:
+    """Rip one title, automatically retrying up to auto_retries times.
+
+    Once automatic retries are exhausted, asks the user whether to abort the
+    whole ingest, retry once more, or skip the title. Returns the ripped file
+    path, or None if the user chose to skip. Calls sys.exit(1) on abort.
+    """
+    attempt = 0
+    while True:
+        try:
+            return makemkv.rip_and_detect(
+                disc=disc, title_idx=title_idx, raw_dir=raw_dir, minlength=minlength
+            )
+        except (subprocess.CalledProcessError, makemkv.MakemkvError):
+            if attempt < auto_retries:
+                attempt += 1
+                print(
+                    f"\nTitle {title_idx} failed; "
+                    f"retrying ({attempt} of {auto_retries}) ...",
+                    file=sys.stderr,
+                )
+                continue
+            print(
+                f"\nTitle {title_idx} failed. "
+                "Abort the whole ingest, retry the title, or skip and continue? [a/r/s]"
+            )
+            while True:
+                c = input("> ").strip().lower()
+                if c == "a":
+                    print("Aborting.", file=sys.stderr)
+                    sys.exit(1)
+                if c == "r":
+                    break  # back to the rip loop for another attempt
+                if c == "s":
+                    return None
+                print(
+                    "Please enter 'a' to abort, 'r' to retry, or 's' to skip.",
+                    file=sys.stderr,
+                )
+
+
+# ---------------------------------------------------------------------------
 # Main ingest flow
 # ---------------------------------------------------------------------------
 
@@ -161,6 +214,9 @@ def run(args) -> None:
         volume_name,
         len(selected_indexes),
         single_file_tv=(len(selected_indexes) == 1),
+        name=args.name,
+        season=args.season,
+        first_ep=args.first_episode,
     )
 
     episodes: list[int] | None = None
@@ -200,24 +256,15 @@ def run(args) -> None:
     rip_manifest: list[tuple[int, pathlib.Path]] = []
 
     for title_idx in selected_indexes:
-        try:
-            file_path = makemkv.rip_and_detect(
-                disc=0, title_idx=title_idx, raw_dir=raw_dir, minlength=minlength
-            )
+        file_path = _rip_title_with_retries(
+            title_idx,
+            disc=0,
+            raw_dir=raw_dir,
+            minlength=minlength,
+            auto_retries=config.RIP_RETRIES,
+        )
+        if file_path is not None:
             rip_manifest.append((title_idx, file_path))
-        except (subprocess.CalledProcessError, makemkv.MakemkvError):
-            print(
-                f"\nTitle {title_idx} failed. "
-                "Abort the whole ingest, or skip and continue? [a/s]"
-            )
-            while True:
-                c = input("> ").strip().lower()
-                if c == "a":
-                    print("Aborting.", file=sys.stderr)
-                    sys.exit(1)
-                if c == "s":
-                    break
-                print("Please enter 'a' to abort or 's' to skip.", file=sys.stderr)
 
     if not rip_manifest:
         print("No titles survived. Aborting.", file=sys.stderr)
