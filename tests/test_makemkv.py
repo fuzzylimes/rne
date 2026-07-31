@@ -13,13 +13,20 @@ from rne.makemkv import (
     T_DURATION,
     T_SIZE,
     T_SOURCE,
+    extract_messages,
     parse_index_spec,
     parse_info,
     rip_and_detect,
+    run_info,
     summarize,
 )
 
 FIXTURE = Path(__file__).parent / "fixtures" / "makemkv_info_sample.txt"
+
+
+@pytest.fixture(scope="module")
+def sample_output():
+    return FIXTURE.read_text()
 
 
 @pytest.fixture(scope="module")
@@ -233,3 +240,86 @@ def test_rip_and_detect_nonzero_exit_raises(tmp_path):
     with patch("rne.makemkv.subprocess.run", side_effect=fake_run):
         with pytest.raises(subprocess.CalledProcessError):
             rip_and_detect(disc=0, title_idx=0, raw_dir=tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# run_info error reporting — makemkvcon -r writes failures to stdout, not stderr
+# ---------------------------------------------------------------------------
+
+EXPIRED_KEY_OUTPUT = (
+    'MSG:5021,0,0,"The program can\'t find any usable optical drives.",'
+    '"The program can\'t find any usable optical drives."\n'
+    'MSG:5085,0,0,"Evaluation period has expired.",'
+    '"Evaluation period has expired."\n'
+)
+
+
+def _completed(returncode, stdout="", stderr=""):
+    return subprocess.CompletedProcess(
+        args=["makemkvcon"], returncode=returncode, stdout=stdout, stderr=stderr
+    )
+
+
+def test_extract_messages_pulls_human_readable_text():
+    assert extract_messages(EXPIRED_KEY_OUTPUT) == [
+        "The program can't find any usable optical drives.",
+        "Evaluation period has expired.",
+    ]
+
+
+def test_extract_messages_collapses_consecutive_duplicates():
+    output = 'MSG:1,0,0,"Same","Same"\nMSG:1,0,0,"Same","Same"\n'
+    assert extract_messages(output) == ["Same"]
+
+
+def test_extract_messages_ignores_non_msg_rows(sample_output):
+    assert "Evaluation period has expired." not in extract_messages(sample_output)
+
+
+def test_run_info_nonzero_exit_reports_stdout_messages(capsys):
+    with patch(
+        "rne.makemkv.subprocess.run",
+        return_value=_completed(1, stdout=EXPIRED_KEY_OUTPUT, stderr=""),
+    ):
+        with pytest.raises(subprocess.CalledProcessError):
+            run_info(disc=0, minlength=900)
+    err = capsys.readouterr().err
+    assert "Evaluation period has expired." in err
+
+
+def test_run_info_nonzero_exit_with_no_output_still_says_something(capsys):
+    with patch("rne.makemkv.subprocess.run", return_value=_completed(3)):
+        with pytest.raises(subprocess.CalledProcessError):
+            run_info(disc=0, minlength=900)
+    assert "exited 3" in capsys.readouterr().err
+
+
+def test_run_info_nonzero_exit_reports_stderr_when_present(capsys):
+    with patch(
+        "rne.makemkv.subprocess.run",
+        return_value=_completed(1, stderr="segfault"),
+    ):
+        with pytest.raises(subprocess.CalledProcessError):
+            run_info(disc=0, minlength=900)
+    assert "segfault" in capsys.readouterr().err
+
+
+def test_run_info_zero_exit_no_titles_reports_messages(capsys):
+    with patch(
+        "rne.makemkv.subprocess.run",
+        return_value=_completed(0, stdout=EXPIRED_KEY_OUTPUT),
+    ):
+        disc_info, titles = run_info(disc=0, minlength=900)
+    assert titles == {}
+    assert "Evaluation period has expired." in capsys.readouterr().err
+
+
+def test_run_info_success_is_quiet(capsys, sample_output):
+    with patch(
+        "rne.makemkv.subprocess.run",
+        return_value=_completed(0, stdout=sample_output),
+    ):
+        disc_info, titles = run_info(disc=0, minlength=900)
+    assert titles
+    # Only the echoed command line, no message spam on the happy path.
+    assert capsys.readouterr().err.count("\n") == 1

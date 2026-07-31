@@ -32,6 +32,43 @@ sudo apt install pipx && pipx ensurepath
 # Then re-login or: source ~/.bashrc
 ```
 
+### MakeMKV expiry
+
+MakeMKV's free beta license expires every couple of months. When it does,
+`rne ingest` aborts right after echoing the `makemkvcon` command. Run the
+command by hand to see the reason:
+
+```bash
+makemkvcon -r --minlength=900 info disc:0; echo "exit=$?"
+```
+
+An expired install reports one of:
+
+```
+MSG:5085 ... "Evaluation period has expired."
+MSG:5021 ... "This application version is too old.  Please download the latest
+              version at http://www.makemkv.com/ or enter a registration key ..."
+```
+
+Two fixes, in order of preference:
+
+1. **Upgrade MakeMKV.** Find out how it was installed first —
+   `dpkg -S "$(command -v makemkvcon)"` names the owning package, or reports
+   nothing if it was built from source. If it came from the
+   `heyarje/makemkv-beta` PPA:
+
+   ```bash
+   sudo apt update && sudo apt install --only-upgrade makemkv-bin makemkv-oss
+   ```
+
+   If it was built from source, rebuild from the current `makemkv-oss` and
+   `makemkv-bin` tarballs on makemkv.com.
+
+2. **Refresh the beta key.** Paste the current key from the MakeMKV forum's
+   beta-key thread into `~/.MakeMKV/settings.conf` as `app_Key = "..."`. Faster,
+   but the keys expire too, and a new key will not revive a version the binary
+   itself considers too old — case 2 above needs the upgrade.
+
 ---
 
 ## b. Install
@@ -40,14 +77,14 @@ On the Mac (build machine):
 
 ```bash
 uv build
-# Produces dist/rne-0.2.1-py3-none-any.whl
-rsync -av dist/rne-0.2.1-py3-none-any.whl rip@rip.lan:~/
+# Produces dist/rne-0.3.0-py3-none-any.whl
+rsync -av dist/rne-0.3.0-py3-none-any.whl rip@rip.lan:~/
 ```
 
 On the VM:
 
 ```bash
-pipx install ~/rne-0.2.1-py3-none-any.whl
+pipx install ~/rne-0.3.0-py3-none-any.whl
 ```
 
 Verify all three entry points landed in `~/.local/bin/`:

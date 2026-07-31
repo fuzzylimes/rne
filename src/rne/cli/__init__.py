@@ -23,6 +23,22 @@ def _episode_number(value: str) -> int:
     return n
 
 
+def _add_disk_flags(parser: argparse.ArgumentParser) -> None:
+    """Add the mutually exclusive output-location flags to a subparser."""
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "-dk", "--disk",
+        metavar="NAME",
+        help="Write output to a disk defined in ~/.config/rne/config.toml "
+             "(see `rne disks`)",
+    )
+    group.add_argument(
+        "--media-root",
+        metavar="PATH",
+        help="Write output under PATH; staging goes to PATH/staging",
+    )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="rne",
@@ -55,6 +71,7 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="N",
         help="First episode number (TV only; implies TV, skips the content-type prompt)",
     )
+    _add_disk_flags(ingest_p)
 
     queue_p = sub.add_parser(
         "queue", help="Queue already-ripped .mkv files for encoding."
@@ -68,6 +85,9 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Treat source as DVD (forces detelecine prompt for NTSC frame rates)",
     )
+    _add_disk_flags(queue_p)
+
+    sub.add_parser("disks", help="List configured output disks")
 
     ls_p = sub.add_parser("ls", help="List jobs")
     ls_p.add_argument("--all", action="store_true", help="Show full history")
@@ -97,17 +117,34 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _resolve_roots_or_exit(args):
+    """Resolve output roots from the disk flags, exiting on a config error."""
+    import sys
+
+    from rne import config
+
+    try:
+        return config.resolve_roots(disk=args.disk, media_root=args.media_root)
+    except config.ConfigError as exc:
+        print(f"Config error: {exc}", file=sys.stderr)
+        raise SystemExit(2) from None
+
+
 def main() -> None:
     args = _build_parser().parse_args()
 
     if args.command == "ingest":
         from rne.cli.ingest import run
 
-        run(args)
+        run(args, _resolve_roots_or_exit(args))
     elif args.command == "queue":
         from rne.cli.queue import run
 
-        run(args)
+        run(args, _resolve_roots_or_exit(args))
+    elif args.command == "disks":
+        from rne.cli.disks import run
+
+        run()
     elif args.command == "ls":
         from rne.cli.ls import run
 

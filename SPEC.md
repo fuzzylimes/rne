@@ -37,12 +37,64 @@ This worked acceptably for DVDs, where rip and encode times were roughly 1:1. Wi
 | OS | Ubuntu 24.04 |
 | User | `rip` (member of `mediagroup`, GID 1500) |
 | Python | 3.12+ |
-| Media root | `/mnt/media` (9p mount from Proxmox host) |
-| Staging root | `/mnt/media/staging` |
+| Media root | `/mnt/media` (9p mount from Proxmox host) — default; see "Output disks" |
+| Staging root | `/mnt/media/staging` — default; `{media_root}/staging` for other disks |
 | HandBrake | Flatpak: `fr.handbrake.ghb` |
 | MakeMKV | `makemkv-bin` (PPA) |
 | ffmpeg / ffprobe | apt |
 | SQLite | 3.45+ (Ubuntu 24.04 default) |
+
+### Output disks
+
+There is more than one drive available to write encodes to, so the output
+location is resolved per invocation rather than being a fixed constant. Two
+mutually exclusive flags on `rne ingest` and `rne queue` select it:
+
+- **`-dk NAME` / `--disk NAME`** — use a disk defined in the config file.
+- **`--media-root PATH`** — one-off location; staging is `PATH/staging`.
+
+Named disks live in an optional TOML file at `~/.config/rne/config.toml`
+(override the location with `RNE_CONFIG`):
+
+```toml
+default_disk = "media"
+
+[disks.media]
+media_root = "/mnt/media"
+
+[disks.archive]
+media_root = "/mnt/media2"
+staging_root = "/mnt/scratch/incoming"   # optional; defaults to {media_root}/staging
+```
+
+Resolution precedence, highest first:
+
+1. `--media-root` (never reads the config file at all).
+2. `--disk NAME`.
+3. `default_disk` from the config file.
+4. Built-in defaults — `MEDIA_ROOT` / `STAGING_ROOT` in `config.py`, the latter
+   still overridable with `RNE_STAGING_ROOT`.
+
+**A missing config file is not an error** — resolution silently falls through to
+the built-in defaults, so the single-drive setup keeps working with no config at
+all. **A config file that exists but is malformed is a hard error** (exit 2) —
+unknown keys, a non-absolute path, a `default_disk` naming an undefined disk, or
+unparseable TOML. Silently ignoring a typo'd key would send an eight-hour encode
+to the wrong drive; failing loudly is much cheaper.
+
+`rne disks` lists the configured disks, marks the default, and reports whether
+each `media_root` is currently mounted.
+
+TOML, not YAML, because `tomllib` is stdlib in 3.12 and YAML would mean a
+dependency. This is a deliberate exception to the "flat constants, not yaml"
+rule below — the config file holds a *set* of named profiles, which flat
+constants handle badly; every other setting stays a constant in `config.py`.
+
+Only the ingest-time CLIs consult any of this. The worker reads absolute
+`output_path` values already resolved into the DB, so it needs no notion of
+which disk a job targets. Note that `ConditionPathExists=/mnt/media` in the
+worker unit still gates worker startup on the *primary* drive being mounted,
+regardless of which disk a given job writes to.
 
 ## Architecture overview
 
@@ -248,6 +300,7 @@ The prompt itself only appears when the source codec is *not* in `COPY_FRIENDLY_
 ### Options
 
 - **`--dvd`** — treat the source as a DVD. Forces the detelecine prompt to appear (with default Y) for any title whose frame rate falls in the NTSC range (28–31 fps), regardless of whether the video codec is `mpeg2video`. Useful when the source file's codec metadata doesn't clearly identify it as DVD-origin.
+- **`-dk` / `--disk`, `--media-root`** — output location; see "Output disks". Same flags and same precedence as `rne ingest`. They affect only where encodes are written; source files are never moved.
 
 ### Path resolution
 
@@ -319,6 +372,7 @@ rne/
     │   ├── __init__.py      # argparse dispatcher
     │   ├── _pipeline.py     # shared helpers (probe display, encoding config, preview, DB ops, disc-split flow)
     │   ├── disc_split.py    # chapter grouping algorithms for multi-episode disc mode
+    │   ├── disks.py         # rne disks — list configured output disks
     │   ├── ingest.py        # disc-to-queue interactive flow
     │   ├── queue.py         # queue already-ripped .mkv files
     │   ├── ls.py
@@ -342,7 +396,7 @@ rne/
 
 ### Module ownership
 
-- **`config.py`** — flat module of constants. Things like `DB_PATH`, `STAGING_ROOT`, `MEDIA_ROOT`, default minlength, default ffprobe timeout, the flatpak HandBrake invocation prefix, `COPY_FRIENDLY_AUDIO_CODECS`, `AC3_BITRATE_BY_CHANNELS`, `DEFAULT_PRESET` / `DEFAULT_PRESET_DVD`, `RIP_RETRIES` (env `RNE_RIP_RETRIES`). Override via env vars where appropriate. Not pydantic, not yaml. When the project grows past 10 settings, revisit.
+- **`config.py`** — flat module of constants. Things like `DB_PATH`, `STAGING_ROOT`, `MEDIA_ROOT`, default minlength, default ffprobe timeout, the flatpak HandBrake invocation prefix, `COPY_FRIENDLY_AUDIO_CODECS`, `AC3_BITRATE_BY_CHANNELS`, `DEFAULT_PRESET` / `DEFAULT_PRESET_DVD`, `RIP_RETRIES` (env `RNE_RIP_RETRIES`). Override via env vars where appropriate. Not pydantic. When the project grows past 10 settings, revisit. The one exception to "flat constants" is output-disk resolution (see "Output disks"): `load_disk_config()` parses the optional TOML file into a `DiskConfig`, and `resolve_roots(disk=..., media_root=...)` returns a frozen `Roots(media_root, staging_root)` for one invocation. Both raise `ConfigError` on a malformed file or unknown disk name. `Roots` is threaded into `ingest.run()` / `queue.run()` as a parameter — no mutable module-level state.
 - **`db.py`** — owns everything sqlite. Schema as a `SCHEMA_SQL` constant, `init_db()` that runs it idempotently, `connect()` that applies pragmas. Thin functions like `claim_next_job()`, `update_progress(...)`, `mark_done(...)`. No ORM. `sqlite3.Row` row factory. One-off queries can stay inline at the call site.
 - **`models.py`** — dataclasses mirroring the columns, with `from_row(row)` classmethods. `JobStatus` is a `StrEnum`. `HandbrakeArgs` and the nested `AudioTrack` dataclass with `to_json()` / `from_json()`.
 - **`handbrake.py`** — pure. Takes a `HandbrakeArgs` and source path, returns `["HandBrakeCLI", "-i", ...]`. No subprocess, no DB, no I/O. The flatpak prefix from `config.py` is prepended here. Validates `AudioTrack` entries: bitrate required when codec != "copy", rejected when codec == "copy". `source_path` may point outside `/mnt/media/staging/` for jobs created via `rne queue` — this is valid and expected.
@@ -361,7 +415,7 @@ rne/
 ```toml
 [project]
 name = "rne"
-version = "0.2.1"
+version = "0.3.0"
 requires-python = ">=3.12"
 dependencies = ["flask>=3.0"]
 
@@ -470,6 +524,8 @@ Metadata can be pre-supplied via CLI flags, skipping the corresponding prompts:
 - `-n` / `--name` — show or movie name.
 - `-sn` / `--season` — season number (0 for specials). TV only.
 - `-fe` / `--first-episode` — first episode number. TV only.
+- `-dk` / `--disk`, `--media-root` — output location; see "Output disks". These
+  affect step 4 rather than the metadata prompts, and are mutually exclusive.
 
 Providing `-sn` or `-fe` implies TV episodes, so the content-type prompt is skipped (`-n` alone does not — it fills the name for whichever type is chosen). Values not provided are still prompted for. When name, season, and first episode are all given, the only remaining metadata interaction is the `→ titles will be ...` confirmation. The multi-episode disc question (step 3a) is unaffected by these flags and is still asked when it applies. Flag values pass through the same `mungefilename` sanitization as prompted input; season/episode values are validated by argparse (season ≥ 0, first episode ≥ 1).
 
@@ -519,7 +575,7 @@ No database schema change is required. Chapter range data is stored in the exist
 At the start of step 4, the CLI performs these operations in order:
 
 1. **INSERT into `ingest_batches`**, capture `cursor.lastrowid` as `batch_id`.
-2. **Construct `raw_dir`** = `{staging_root}/{show}/_raw/batch-{batch_id}/`.
+2. **Construct `raw_dir`** = `{staging_root}/{show}/_raw/batch-{batch_id}/`, where `staging_root` is the one resolved from the disk flags (see "Output disks").
 3. **`raw_dir.mkdir(parents=True, exist_ok=False)`** — `exist_ok=False` is intentional: a fresh batch id must produce a fresh dir; if the dir already exists something is wrong (id collision or stale state) and a clear error is preferable to silently mixing rips.
 4. **Confirm and rip** (see below).
 
@@ -529,7 +585,7 @@ Right before the rip kicks off:
 Rip to /mnt/media/staging/Initial D/_raw/batch-7/ [Y/n]:
 ```
 
-`n` opens a path prompt to override the staging root. The batch-scoped `_raw/batch-{id}/` suffix is always appended. This handles "disc title was hot garbage and I forgot to fix it in step 3" without forcing every ingest through an extra prompt.
+`n` opens a path prompt to override the staging root for this ingest only, whatever disk was resolved. The batch-scoped `_raw/batch-{id}/` suffix is always appended. This handles "disc title was hot garbage and I forgot to fix it in step 3" without forcing every ingest through an extra prompt.
 
 Then, for each selected title **in `.mpls` display order** (i.e. the order the disc indexes appear after the step-1 sort):
 
@@ -649,6 +705,7 @@ CLI exits. The worker (running independently under systemd) claims the first job
 
 ## Other CLI subcommands
 
+- **`rne disks`** — list the disks defined in the config file, marking the one used when `-dk` is omitted and showing whether each `media_root` is mounted. With no config file, prints the built-in defaults and an example config. Exits 2 on a malformed config file, same as the ingest paths.
 - **`rne ls`** — list jobs with status, optionally filtered. `--all` shows full history. Default shows queued + running + recent terminal states.
 - **`rne edit <id>`** — opens that job's `handbrake_args` JSON in `$EDITOR`. On save, validates and writes back. **Refuses to edit a `running` job** with a non-zero exit. Editing other states (queued, paused, failed, interrupted, cancelled, done) is allowed. Validation criteria (all must pass; on failure the user is offered a chance to re-open the editor):
   1. **JSON parses** — the file content is valid JSON.

@@ -3,7 +3,7 @@ from __future__ import annotations
 import pathlib
 import sys
 
-from rne import db
+from rne import config, db
 from rne.cli._pipeline import (
     create_batch_row,
     insert_jobs,
@@ -118,7 +118,7 @@ def _resolve_manifest(path: pathlib.Path) -> list[pathlib.Path]:
 # ---------------------------------------------------------------------------
 
 
-def run(args) -> None:
+def run(args, roots: config.Roots) -> None:
     path = pathlib.Path(args.path).expanduser().resolve()
 
     # ---- Step 1: resolve path --------------------------------------------------
@@ -168,8 +168,7 @@ def run(args) -> None:
 
     # ---- Step 6: build job plan ------------------------------------------------
     # Output goes to staging under the show/movie name, same as ingest.
-    from rne import config
-    staging_dir = pathlib.Path(config.STAGING_ROOT) / (
+    staging_dir = roots.staging_root / (
         show if is_tv else movie  # type: ignore[arg-type]
     )
 

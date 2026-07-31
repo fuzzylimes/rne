@@ -17,10 +17,10 @@ See [docs/install.md](docs/install.md) for the full prerequisite checklist and s
 ```bash
 # Build on Mac, copy wheel to VM
 uv build
-rsync -av dist/rne-0.2.1-py3-none-any.whl rip@rip:~/
+rsync -av dist/rne-0.3.0-py3-none-any.whl rip@rip:~/
 
 # On VM: install and set up services
-pipx install ~/rne-0.2.1-py3-none-any.whl
+pipx install ~/rne-0.3.0-py3-none-any.whl
 rne service install
 loginctl enable-linger rip
 systemctl --user enable --now rne-worker rne-dashboard
@@ -43,6 +43,8 @@ rne ingest -m 0      # no filter — shows every title on the disc
 The CLI walks through title detection, content classification (TV or movie), naming, audio/subtitle track selection, and encoding parameters. At the end it rips the selected titles and queues the encode jobs. The worker picks them up automatically.
 
 The `--minlength` / `-m` value is passed to both the title-listing and ripping steps so that title indices are always consistent between the two.
+
+To write the output to a different drive, see [Choosing an output disk](#choosing-an-output-disk).
 
 Metadata can be pre-supplied on the command line to skip the corresponding prompts:
 
@@ -88,6 +90,36 @@ The `--dvd` flag is only needed when the source codec isn't `mpeg2video` — for
 When queuing a single TV file, the CLI also asks whether it is a multi-episode disc (see below).
 
 Source files are never moved or copied. Do not move or delete them until encoding completes.
+
+### Choosing an output disk
+
+Both `rne ingest` and `rne queue` write encodes under a staging root. With more than one drive available, pick which one per invocation:
+
+```bash
+rne ingest -dk archive                    # a disk named in the config file
+rne ingest --media-root /mnt/media2       # one-off; staging goes to /mnt/media2/staging
+rne disks                                 # list configured disks
+```
+
+The two flags are mutually exclusive. With neither, output goes to the config file's `default_disk`, or to the built-in `/mnt/media/staging` if there is no config file.
+
+Name your drives once in `~/.config/rne/config.toml` so you don't have to type paths:
+
+```toml
+default_disk = "media"
+
+[disks.media]
+media_root = "/mnt/media"
+
+[disks.archive]
+media_root = "/mnt/media2"
+# staging_root defaults to {media_root}/staging; override it if you need to:
+# staging_root = "/mnt/scratch/incoming"
+```
+
+The config file is entirely optional — without one, everything behaves as it did before. But if the file exists and has a problem (a typo'd key, a relative path, a `default_disk` that isn't defined), the command stops with an error rather than quietly falling back, so a typo can't send an eight-hour encode to the wrong drive.
+
+Set `RNE_CONFIG` to use a config file somewhere other than `~/.config/rne/config.toml`.
 
 ### Multi-episode discs
 
@@ -152,11 +184,12 @@ rne probe --deep <file>    # full packet scan (slow on large Blu-rays)
 
 ## Configuration
 
-Defaults live in `src/rne/config.py`. Key constants:
+Output locations are chosen per invocation — see [Choosing an output disk](#choosing-an-output-disk). Everything else lives as a constant in `src/rne/config.py`:
 
 | Constant | Default | Notes |
 |---|---|---|
-| `STAGING_ROOT` | `/mnt/media/staging` | Override with `RNE_STAGING_ROOT` env var |
+| `STAGING_ROOT` | `/mnt/media/staging` | Fallback when no disk is selected; override with `RNE_STAGING_ROOT` env var |
+| `CONFIG_PATH` | `~/.config/rne/config.toml` | Named output disks; override with `RNE_CONFIG` env var |
 | `RNE_DB` | `~/.local/state/rne/jobs.db` | Override with `RNE_DB` env var |
 | `COPY_FRIENDLY_AUDIO_CODECS` | `ac3, eac3, aac, mp3, opus` | Tracks with these codecs are copied; others trigger a transcode prompt |
 | `AC3_BITRATE_BY_CHANNELS` | 96/192/640 kbps | Recommended AC3 bitrate by channel count |
@@ -197,7 +230,7 @@ Raw files are kept in `_raw/batch-{id}/` under the show/movie staging directory,
 uv sync             # install deps including dev group
 uv run pytest       # run tests
 uv run ruff check   # lint
-uv build            # build wheel → dist/rne-0.2.1-py3-none-any.whl
+uv build            # build wheel → dist/rne-0.3.0-py3-none-any.whl
 ```
 
 Tests use in-memory SQLite; no external binaries required.

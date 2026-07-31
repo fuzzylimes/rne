@@ -119,6 +119,27 @@ def parse_index_spec(spec: str) -> list[int] | None:
     return sorted(indexes)
 
 
+def extract_messages(output: str) -> list[str]:
+    """Pull the human-readable text out of makemkvcon -r MSG rows.
+
+    In robot mode makemkvcon writes its messages — including the reason for a
+    failure, e.g. an expired beta key or a drive it could not open — to stdout
+    as MSG rows, leaving stderr empty. Field 3 is the already-formatted text.
+    Consecutive duplicates are collapsed; makemkv repeats itself freely.
+    """
+    messages: list[str] = []
+    for line in output.splitlines():
+        parsed = parse_line(line)
+        if not parsed:
+            continue
+        prefix, f = parsed
+        if prefix == "MSG" and len(f) >= 4 and f[3] and f[3] != (
+            messages[-1] if messages else None
+        ):
+            messages.append(f[3])
+    return messages
+
+
 def run_info(disc: int, minlength: int) -> tuple[dict, dict]:
     """Run makemkvcon info and return (disc_info, titles).
 
@@ -127,12 +148,31 @@ def run_info(disc: int, minlength: int) -> tuple[dict, dict]:
     cmd = ["makemkvcon", "-r", f"--minlength={minlength}", "info", f"disc:{disc}"]
     print(f"$ {' '.join(cmd)}", file=sys.stderr)
     result = subprocess.run(cmd, capture_output=True, text=True)
+    # Report messages on any unhappy path. stderr alone is not enough: in robot
+    # mode it is usually empty, so relying on it turns a failed info run into a
+    # silent non-zero exit with no clue as to why.
+    messages = extract_messages(result.stdout)
     if result.returncode != 0:
-        print(result.stderr, file=sys.stderr)
+        for msg in messages:
+            print(msg, file=sys.stderr)
+        if result.stderr.strip():
+            print(result.stderr.strip(), file=sys.stderr)
+        if not messages and not result.stderr.strip():
+            print(
+                f"makemkvcon exited {result.returncode} with no output.",
+                file=sys.stderr,
+            )
         raise subprocess.CalledProcessError(
             result.returncode, cmd, result.stdout, result.stderr
         )
-    return parse_info(result.stdout)
+
+    disc_info, titles = parse_info(result.stdout)
+    if not titles:
+        # Exit 0 but nothing usable — the MSG rows say why (no disc, all titles
+        # below minlength, unreadable disc). The caller prints its own summary.
+        for msg in messages:
+            print(msg, file=sys.stderr)
+    return disc_info, titles
 
 
 class MakemkvError(Exception):

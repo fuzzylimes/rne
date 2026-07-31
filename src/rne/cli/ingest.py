@@ -163,7 +163,7 @@ def _rip_title_with_retries(
 # ---------------------------------------------------------------------------
 
 
-def run(args) -> None:
+def run(args, roots: config.Roots) -> None:
     minlength: int = args.minlength
 
     # ---- Step 1: disc detection ------------------------------------------------
@@ -230,8 +230,7 @@ def run(args) -> None:
     #   b. Construct raw_dir using batch_id
     #   c. mkdir(exist_ok=False) — fresh id must produce a fresh dir
     #   d. Rip loop: rip_and_detect per title, build rip_manifest in disc order
-    staging_dir = pathlib.Path(config.STAGING_ROOT) / \
-        (show if is_tv else movie)  # type: ignore[arg-type]
+    staging_dir = roots.staging_root / (show if is_tv else movie)  # type: ignore[arg-type]
 
     conn = db.connect()
     db.init_db(conn)
