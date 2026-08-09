@@ -17,10 +17,10 @@ See [docs/install.md](docs/install.md) for the full prerequisite checklist and s
 ```bash
 # Build on Mac, copy wheel to VM
 uv build
-rsync -av dist/rne-0.3.0-py3-none-any.whl rip@rip:~/
+rsync -av dist/rne-0.4.0-py3-none-any.whl rip@rip:~/
 
 # On VM: install and set up services
-pipx install ~/rne-0.3.0-py3-none-any.whl
+pipx install ~/rne-0.4.0-py3-none-any.whl
 rne service install
 loginctl enable-linger rip
 systemctl --user enable --now rne-worker rne-dashboard
@@ -65,9 +65,10 @@ Example session flow:
 2. Select titles by display `#`: `0-7`, `0,2,4`, `all`, or empty to abort
 3. TV or Movie? → if TV with exactly one title selected, asks about multi-episode disc mode first (see below), then prompts for show/season/starting episode; if movie, prompts for title
 4. Confirm staging directory, then rip
-5. Probe of first file — shows video/audio/subtitle track table
-6. Audio tracks to encode, subtitle tracks, CRF quality, preset, detelecine (DVD + NTSC only), decomb. The preset default is `medium` for DVD sources (`mpeg2video` codec or `--dvd` flag) and `slow` for everything else (Blu-rays)
-7. Preview of all queued jobs — confirm or edit before inserting
+5. Rip-complete notification, if configured — see [Getting notified when a rip finishes](#getting-notified-when-a-rip-finishes)
+6. Probe of first file — shows video/audio/subtitle track table
+7. Audio tracks to encode, subtitle tracks, CRF quality, preset, detelecine (DVD + NTSC only), decomb. The preset default is `medium` for DVD sources (`mpeg2video` codec or `--dvd` flag) and `slow` for everything else (Blu-rays)
+8. Preview of all queued jobs — confirm or edit before inserting
 
 If a title fails to rip, it is retried automatically (once by default — see `RNE_RIP_RETRIES` under Configuration). Once automatic retries are exhausted you are asked whether to abort the whole ingest, retry the title again, or skip it and continue:
 
@@ -120,6 +121,117 @@ media_root = "/mnt/media2"
 The config file is entirely optional — without one, everything behaves as it did before. But if the file exists and has a problem (a typo'd key, a relative path, a `default_disk` that isn't defined), the command stops with an error rather than quietly falling back, so a typo can't send an eight-hour encode to the wrong drive.
 
 Set `RNE_CONFIG` to use a config file somewhere other than `~/.config/rne/config.toml`.
+
+### Getting notified when a rip finishes
+
+Ripping is the part you have to be present for — once it's done the drive is
+free and the disc can be swapped, but nothing tells you that from another room.
+`rne ingest` can publish an MQTT message the moment ripping finishes (right
+before the track-selection prompts), which Home Assistant can turn into a phone
+push.
+
+Add a `[notifications.mqtt]` table to the same config file:
+
+```toml
+[notifications.mqtt]
+host     = "homeassistant.local"
+username = "rne"
+password = "..."
+topic    = "rne/rip"
+payload  = '{"disc": "{disc}", "title": "{title}", "titles": {count}}'
+```
+
+That's the minimum plus credentials — `host` and `topic` are the only required
+keys. **The topic and payload are yours**; rne doesn't care what's in them. Use
+a bare string if that's all you need:
+
+```toml
+topic   = "house/notify"
+payload = "Disc done, go swap it"
+```
+
+The full set of keys:
+
+| Key | Default | Notes |
+|---|---|---|
+| `host` | *required* | Broker hostname or IP — the machine running Mosquitto, usually Home Assistant itself |
+| `topic` | *required* | Any topic you like. No `+` or `#` — those are for subscribing |
+| `payload` | `"{title} rip complete"` | Any string. JSON is fine and needs no escaping |
+| `port` | `1883` | `8883` is the convention for TLS |
+| `username` / `password` | none | Omit both for an anonymous broker |
+| `client_id` | `rne-<pid>` | Only matters if your broker filters on it |
+| `qos` | `0` | `0` = fire and forget, `1` = wait for the broker to acknowledge. `2` is not supported |
+| `retain` | `false` | `true` makes the broker keep the last message for new subscribers |
+| `tls` | `false` | `tls_insecure = true` additionally skips certificate verification — only for a self-signed cert on a network you trust |
+| `timeout` | `5.0` | Seconds. Caps how long ingest can pause on a broker that isn't answering |
+
+Both `topic` and `payload` support these placeholders:
+
+| Placeholder | Example |
+|---|---|
+| `{disc}` | `INITIAL_D_VOL3` — the disc's volume name |
+| `{title}` | `Initial D` — the show/movie name you entered |
+| `{kind}` | `tv` or `movie` |
+| `{season}` | `1` (empty for movies) |
+| `{count}` | `7` — titles ripped |
+| `{batch}` | `17` — the batch id, matches `rne ls` |
+| `{hostname}` | `rip` — the machine running rne |
+
+Anything that isn't a recognised placeholder is left alone, so JSON braces need
+no escaping and a typo like `{titel}` shows up literally in the message rather
+than breaking it.
+
+Since the file holds a broker password, lock it down:
+
+```bash
+chmod 600 ~/.config/rne/config.toml
+```
+
+**Setting this up in Home Assistant**, if you haven't used MQTT before:
+
+1. Install the **Mosquitto broker** add-on (Settings → Add-ons → Add-on Store)
+   and start it. Add the **MQTT** integration when Home Assistant offers it.
+2. Create a normal Home Assistant user for rne to log in as (Settings → People →
+   Add Person, "Allow person to login"). Mosquitto accepts HA users as MQTT
+   credentials — put that username and password in the config file above.
+3. Set `host` to your Home Assistant machine and leave `port` at `1883`.
+4. Add an automation that listens on your topic and pushes to your phone. In
+   Settings → Automations → Create → Edit in YAML:
+
+   ```yaml
+   alias: Disc rip finished
+   triggers:
+     - trigger: mqtt
+       topic: rne/rip
+   actions:
+     - action: notify.mobile_app_<your_phone>
+       data:
+         title: Rip finished
+         message: "{{ trigger.payload_json.title }} — {{ trigger.payload_json.titles }} titles ready"
+   ```
+
+   `trigger.payload_json` works when your `payload` is JSON. For a plain-string
+   payload use `{{ trigger.payload }}` instead.
+
+To check it end to end without burning a disc, watch the topic from the HA
+host — Settings → Devices & Services → MQTT → Configure → Listen to a topic —
+and run an ingest.
+
+Ingest prints one line either way and **never stops for a notification
+problem**:
+
+```
+Notification sent: rne/rip -> homeassistant.local:1883
+Notification failed: homeassistant.local:1883: [Errno 111] Connection refused
+```
+
+If the broker is down, unreachable, or rejects the password, you get the second
+line and the prompts continue as normal. With no `[notifications.mqtt]` table
+at all, nothing is attempted and nothing is printed. A table that's there but
+missing `host` or `topic` prints `Notification skipped: ...` and carries on —
+but a *misspelled* key is treated like any other config typo and stops the
+command with exit 2 before the disc spins up, so a silent `topc = "rne/rip"`
+can't leave you waiting for a notification that was never going to arrive.
 
 ### Multi-episode discs
 
@@ -184,12 +296,12 @@ rne probe --deep <file>    # full packet scan (slow on large Blu-rays)
 
 ## Configuration
 
-Output locations are chosen per invocation — see [Choosing an output disk](#choosing-an-output-disk). Everything else lives as a constant in `src/rne/config.py`:
+Two things come from `~/.config/rne/config.toml`: output locations, chosen per invocation — see [Choosing an output disk](#choosing-an-output-disk) — and [rip-complete notifications](#getting-notified-when-a-rip-finishes). Everything else lives as a constant in `src/rne/config.py`:
 
 | Constant | Default | Notes |
 |---|---|---|
 | `STAGING_ROOT` | `/mnt/media/staging` | Fallback when no disk is selected; override with `RNE_STAGING_ROOT` env var |
-| `CONFIG_PATH` | `~/.config/rne/config.toml` | Named output disks; override with `RNE_CONFIG` env var |
+| `CONFIG_PATH` | `~/.config/rne/config.toml` | Named output disks and notifications; override with `RNE_CONFIG` env var |
 | `RNE_DB` | `~/.local/state/rne/jobs.db` | Override with `RNE_DB` env var |
 | `COPY_FRIENDLY_AUDIO_CODECS` | `ac3, eac3, aac, mp3, opus` | Tracks with these codecs are copied; others trigger a transcode prompt |
 | `AC3_BITRATE_BY_CHANNELS` | 96/192/640 kbps | Recommended AC3 bitrate by channel count |
@@ -230,7 +342,7 @@ Raw files are kept in `_raw/batch-{id}/` under the show/movie staging directory,
 uv sync             # install deps including dev group
 uv run pytest       # run tests
 uv run ruff check   # lint
-uv build            # build wheel → dist/rne-0.3.0-py3-none-any.whl
+uv build            # build wheel → dist/rne-0.4.0-py3-none-any.whl
 ```
 
 Tests use in-memory SQLite; no external binaries required.

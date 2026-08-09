@@ -282,3 +282,221 @@ def test_disk_and_media_root_are_mutually_exclusive():
 
 def test_disks_command_parses():
     assert _build_parser().parse_args(["disks"]).command == "disks"
+
+
+# ---------------------------------------------------------------------------
+# load_notify_config — opting in
+# ---------------------------------------------------------------------------
+
+
+def test_no_config_file_means_no_notifications(tmp_path):
+    cfg = config.load_notify_config(tmp_path / "nope.toml")
+    assert cfg.mqtt is None
+    assert cfg.skipped is None
+
+
+def test_no_notifications_section_means_no_notifications(tmp_path):
+    path = write_config(tmp_path, """
+        [disks.media]
+        media_root = "/mnt/media"
+    """)
+    cfg = config.load_notify_config(path)
+    assert cfg.mqtt is None
+    assert cfg.skipped is None
+
+
+def test_minimal_mqtt_section_applies_defaults(tmp_path):
+    path = write_config(tmp_path, """
+        [notifications.mqtt]
+        host = "homeassistant.local"
+        topic = "rne/disc"
+    """)
+    mqtt = config.load_notify_config(path).mqtt
+    assert mqtt == config.MqttConfig(
+        host="homeassistant.local",
+        topic="rne/disc",
+        payload=config.DEFAULT_MQTT_PAYLOAD,
+        port=1883,
+        timeout=config.DEFAULT_MQTT_TIMEOUT,
+    )
+
+
+def test_full_mqtt_section_is_read_verbatim(tmp_path):
+    path = write_config(tmp_path, """
+        [notifications.mqtt]
+        host = "10.0.0.5"
+        port = 8883
+        username = "rne"
+        password = "hunter2"
+        client_id = "ripper"
+        topic = "rne/{hostname}/disc"
+        payload = '{"disc": "{disc}"}'
+        qos = 1
+        retain = true
+        tls = true
+        tls_insecure = true
+        timeout = 2
+    """)
+    mqtt = config.load_notify_config(path).mqtt
+    assert mqtt == config.MqttConfig(
+        host="10.0.0.5",
+        topic="rne/{hostname}/disc",
+        payload='{"disc": "{disc}"}',
+        port=8883,
+        username="rne",
+        password="hunter2",
+        client_id="ripper",
+        qos=1,
+        retain=True,
+        tls=True,
+        tls_insecure=True,
+        timeout=2.0,
+    )
+
+
+def test_integer_timeout_becomes_float(tmp_path):
+    path = write_config(tmp_path, """
+        [notifications.mqtt]
+        host = "h"
+        topic = "t"
+        timeout = 3
+    """)
+    assert config.load_notify_config(path).mqtt.timeout == 3.0
+
+
+def test_notifications_coexist_with_disks(tmp_path):
+    path = write_config(tmp_path, """
+        default_disk = "media"
+
+        [disks.media]
+        media_root = "/mnt/media"
+
+        [notifications.mqtt]
+        host = "h"
+        topic = "t"
+    """)
+    assert config.load_disk_config(path).default_disk == "media"
+    assert config.load_notify_config(path).mqtt.host == "h"
+
+
+# ---------------------------------------------------------------------------
+# load_notify_config — missing keys skip, typos are hard errors
+# ---------------------------------------------------------------------------
+
+
+def test_empty_mqtt_section_skips_with_a_reason(tmp_path):
+    path = write_config(tmp_path, """
+        [notifications.mqtt]
+    """)
+    cfg = config.load_notify_config(path)
+    assert cfg.mqtt is None
+    assert "'host'" in cfg.skipped and "'topic'" in cfg.skipped
+
+
+def test_missing_topic_skips_with_a_reason(tmp_path):
+    path = write_config(tmp_path, """
+        [notifications.mqtt]
+        host = "homeassistant.local"
+    """)
+    cfg = config.load_notify_config(path)
+    assert cfg.mqtt is None
+    assert "'topic'" in cfg.skipped
+    assert "'host'" not in cfg.skipped
+
+
+def test_empty_notifications_table_is_not_an_error(tmp_path):
+    path = write_config(tmp_path, """
+        [notifications]
+    """)
+    cfg = config.load_notify_config(path)
+    assert cfg.mqtt is None
+    assert cfg.skipped is None
+
+
+def test_typo_in_mqtt_key_raises(tmp_path):
+    path = write_config(tmp_path, """
+        [notifications.mqtt]
+        host = "h"
+        topic = "t"
+        topc = "rne/disc"
+    """)
+    with pytest.raises(config.ConfigError, match="topc"):
+        config.load_notify_config(path)
+
+
+def test_unknown_transport_raises(tmp_path):
+    path = write_config(tmp_path, """
+        [notifications.webhook]
+        url = "http://example.test/hook"
+    """)
+    with pytest.raises(config.ConfigError, match="webhook"):
+        config.load_notify_config(path)
+
+
+def test_notifications_section_is_accepted_by_load_disk_config(tmp_path):
+    path = write_config(tmp_path, """
+        [notifications.mqtt]
+        host = "h"
+        topic = "t"
+    """)
+    assert config.load_disk_config(path).disks == {}
+
+
+@pytest.mark.parametrize(
+    "body,match",
+    [
+        ('host = 42\ntopic = "t"', "host must be a non-empty string"),
+        ('host = "h"\ntopic = ""', "topic must be a non-empty string"),
+        ('host = "h"\ntopic = "rne/#"', "wildcards"),
+        ('host = "h"\ntopic = "rne/+/disc"', "wildcards"),
+        ('host = "h"\ntopic = "t"\nport = "1883"', "port must be an integer"),
+        ('host = "h"\ntopic = "t"\nport = true', "port must be an integer"),
+        ('host = "h"\ntopic = "t"\nport = 0', "between 1 and 65535"),
+        ('host = "h"\ntopic = "t"\nport = 70000', "between 1 and 65535"),
+        ('host = "h"\ntopic = "t"\nqos = 2', "qos must be between 0 and 1"),
+        ('host = "h"\ntopic = "t"\nqos = -1', "qos must be between 0 and 1"),
+        ('host = "h"\ntopic = "t"\nretain = "yes"', "retain must be true or false"),
+        ('host = "h"\ntopic = "t"\ntls = 1', "tls must be true or false"),
+        ('host = "h"\ntopic = "t"\ntimeout = 0', "greater than 0"),
+        ('host = "h"\ntopic = "t"\ntimeout = "5"', "timeout must be a number"),
+        ('host = "h"\ntopic = "t"\nusername = 7', "username must be a string"),
+        ('host = "h"\ntopic = "t"\npayload = ""', "payload must not be empty"),
+        ('host = "h"\ntopic = "t"\npassword = "p"', "without a username"),
+    ],
+)
+def test_malformed_mqtt_values_raise(tmp_path, body, match):
+    path = write_config(tmp_path, f"[notifications.mqtt]\n{body}\n")
+    with pytest.raises(config.ConfigError, match=match):
+        config.load_notify_config(path)
+
+
+def test_mqtt_that_is_not_a_table_raises(tmp_path):
+    path = write_config(tmp_path, """
+        [notifications]
+        mqtt = "homeassistant.local"
+    """)
+    with pytest.raises(config.ConfigError, match="must be a table"):
+        config.load_notify_config(path)
+
+
+def test_notifications_that_is_not_a_table_raises(tmp_path):
+    path = write_config(tmp_path, 'notifications = "on"\n')
+    with pytest.raises(config.ConfigError, match="must be a table"):
+        config.load_notify_config(path)
+
+
+def test_unparseable_toml_raises_for_notifications_too(tmp_path):
+    path = write_config(tmp_path, "this is not = = toml")
+    with pytest.raises(config.ConfigError):
+        config.load_notify_config(path)
+
+
+def test_config_error_message_names_the_file(tmp_path):
+    path = write_config(tmp_path, """
+        [notifications.mqtt]
+        host = "h"
+        topic = "t"
+        qos = 2
+    """)
+    with pytest.raises(config.ConfigError, match=str(path)):
+        config.load_notify_config(path)

@@ -158,6 +158,34 @@ rne pause    # queue_settings.paused=1; worker idles after current job
 rne resume   # queue_settings.paused=0
 ```
 
+### 9. Rip-complete notification
+
+Needs a broker. Easiest check without one is to point rne at a port nothing is
+listening on and confirm the ingest is unaffected:
+
+```toml
+# ~/.config/rne/config.toml
+[notifications.mqtt]
+host = "127.0.0.1"
+port = 1
+topic = "rne/rip"
+```
+
+Run `rne ingest`. After the rip loop it should print
+`Notification failed: 127.0.0.1:1: [Errno 111] Connection refused` and go
+straight into the probe and track prompts — no hang, no traceback.
+
+With a real broker (Mosquitto on the HA box), subscribe first and watch the
+message land as the rip finishes:
+
+```bash
+mosquitto_sub -h homeassistant.local -u rne -P '...' -t 'rne/#' -v
+```
+
+Then check the three config states: no `[notifications.mqtt]` table (silent),
+`host` set but no `topic` (`Notification skipped: ...`, ingest continues), and a
+misspelled key (exit 2 before the disc is read).
+
 ## What cannot be tested in this dev container
 
 - Disc detection / ripping (`makemkvcon` not installed)

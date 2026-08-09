@@ -1188,3 +1188,83 @@ def test_rip_retries_negative_clamped_to_zero(monkeypatch):
 def test_rip_retries_non_numeric_falls_back_to_default(monkeypatch):
     monkeypatch.setenv("RNE_RIP_RETRIES", "lots")
     assert _rip_retries() == 1
+
+
+# ---------------------------------------------------------------------------
+# Rip-complete notification (ingest wiring)
+# ---------------------------------------------------------------------------
+
+from rne import config as config_mod  # noqa: E402
+from rne import notify  # noqa: E402
+from rne.cli.ingest import (  # noqa: E402
+    _load_notify_config_or_exit,
+    _notify_rip_complete,
+)
+
+_MQTT = config_mod.MqttConfig(host="broker.local", topic="rne/disc")
+
+
+def test_notify_rip_complete_is_a_no_op_when_unconfigured(capsys):
+    with patch("rne.cli.ingest.notify.send") as send:
+        _notify_rip_complete(config_mod.NotifyConfig(), disc="D")
+    send.assert_not_called()
+    assert capsys.readouterr().out == ""
+
+
+def test_notify_rip_complete_reports_a_partial_config(capsys):
+    cfg = config_mod.NotifyConfig(skipped="[notifications.mqtt] is missing 'topic'")
+    with patch("rne.cli.ingest.notify.send") as send:
+        _notify_rip_complete(cfg, disc="D")
+    send.assert_not_called()
+    assert "Notification skipped" in capsys.readouterr().out
+
+
+def test_notify_rip_complete_reports_success(capsys):
+    cfg = config_mod.NotifyConfig(mqtt=_MQTT)
+    with patch(
+        "rne.cli.ingest.notify.send",
+        return_value=notify.Result(True, "rne/disc -> broker.local:1883"),
+    ) as send:
+        _notify_rip_complete(cfg, disc="Initial D", count=7)
+
+    send.assert_called_once_with(_MQTT, {"disc": "Initial D", "count": 7})
+    assert "Notification sent: rne/disc -> broker.local:1883" in capsys.readouterr().out
+
+
+def test_notify_rip_complete_reports_failure_without_raising(capsys):
+    cfg = config_mod.NotifyConfig(mqtt=_MQTT)
+    with patch(
+        "rne.cli.ingest.notify.send",
+        return_value=notify.Result(False, "connection refused"),
+    ):
+        _notify_rip_complete(cfg, disc="D")
+
+    assert "Notification failed: connection refused" in capsys.readouterr().err
+
+
+def test_notify_rip_complete_survives_a_broken_send(capsys):
+    # send() promises never to raise, but ingest must not depend on that promise.
+    cfg = config_mod.NotifyConfig(mqtt=_MQTT)
+    with patch("rne.cli.ingest.notify.send", side_effect=RuntimeError("boom")):
+        with pytest.raises(RuntimeError):
+            _notify_rip_complete(cfg, disc="D")
+
+
+def test_load_notify_config_exits_2_on_a_malformed_section(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "config.toml"
+    path.write_text('[notifications.mqtt]\nhost = "h"\ntopic = "t"\nqos = 2\n')
+    monkeypatch.setattr(config_mod, "CONFIG_PATH", str(path))
+
+    with pytest.raises(SystemExit) as exc:
+        _load_notify_config_or_exit()
+
+    assert exc.value.code == 2
+    assert "Config error" in capsys.readouterr().err
+
+
+def test_load_notify_config_returns_the_parsed_section(tmp_path, monkeypatch):
+    path = tmp_path / "config.toml"
+    path.write_text('[notifications.mqtt]\nhost = "h"\ntopic = "t"\n')
+    monkeypatch.setattr(config_mod, "CONFIG_PATH", str(path))
+
+    assert _load_notify_config_or_exit().mqtt.host == "h"

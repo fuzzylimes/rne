@@ -96,6 +96,59 @@ which disk a job targets. Note that `ConditionPathExists=/mnt/media` in the
 worker unit still gates worker startup on the *primary* drive being mounted,
 regardless of which disk a given job writes to.
 
+### Rip-complete notifications
+
+A disc rip ends silently. The operator is usually in another room and finds out
+only by walking back to the machine, so the drive sits idle and the next disc
+waits. `rne ingest` therefore publishes one MQTT message the moment ripping
+finishes (see "Step 4a"), which Home Assistant — or anything else subscribed to
+the topic — can turn into a phone push.
+
+Settings live in the same config file, in an optional `[notifications.mqtt]`
+table:
+
+```toml
+[notifications.mqtt]
+host     = "homeassistant.local"
+port     = 1883                            # optional, default 1883
+username = "rne"                           # optional
+password = "..."                           # optional; requires username
+topic    = "rne/rip"
+payload  = '{"disc": "{disc}", "titles": {count}}'
+qos      = 0                               # optional, 0 or 1
+retain   = false                           # optional
+tls      = false                           # optional
+timeout  = 5.0                             # optional, seconds
+```
+
+**Topic and payload are user-owned strings.** rne imposes no schema on them: the
+payload above is an example, not a contract. Whatever the user writes is sent
+verbatim apart from `{placeholder}` substitution — `{disc}`, `{title}`,
+`{season}`, `{count}`… see "Step 4a" for the full set. Substitution is a
+regex over `{lowercase_identifier}` rather than `str.format()`, because payloads
+are usually JSON and `format()` would force the user to double every literal
+brace. An unrecognised placeholder is passed through as literal text — a typo
+should degrade the message, not suppress it.
+
+Three failure modes, deliberately handled differently:
+
+1. **Nothing configured** (no file, no `[notifications]`, no `[notifications.mqtt]`)
+   — silent no-op. Notifications are opt-in.
+2. **Configured but incomplete** (`host` or `topic` absent) — prints one line
+   saying it skipped and why, then carries on. A half-filled table means "not
+   set up yet", which is not an error.
+3. **Malformed** (unknown key, wrong type, `qos = 2`, a wildcard in the topic)
+   — `ConfigError`, exit 2, consistent with the rest of the file. This is the
+   one case that fails loudly, and it fails at the *top* of `ingest.run()`,
+   before the disc is touched. Silently ignoring `topc = "rne/rip"` would mean
+   never being notified and never learning why — the exact problem the feature
+   exists to solve. The section is validated up front even when `--media-root`
+   bypasses disk resolution entirely.
+
+Delivery itself never fails the ingest: any broker problem prints one line and
+the prompts continue. See `notify.py` under "Module ownership" for why the MQTT
+client is hand-rolled rather than a dependency.
+
 ## Architecture overview
 
 Three independent processes coordinate through a single SQLite database:
@@ -364,6 +417,7 @@ rne/
     ├── handbrake.py         # args JSON → command list (pure function)
     ├── probe.py             # ffprobe wrapper, stream summary
     ├── makemkv.py           # makemkvcon wrapper
+    ├── notify.py            # minimal MQTT publisher (rip-complete push)
     ├── systemd/
     │   ├── __init__.py
     │   ├── rne-worker.service
@@ -396,13 +450,14 @@ rne/
 
 ### Module ownership
 
-- **`config.py`** — flat module of constants. Things like `DB_PATH`, `STAGING_ROOT`, `MEDIA_ROOT`, default minlength, default ffprobe timeout, the flatpak HandBrake invocation prefix, `COPY_FRIENDLY_AUDIO_CODECS`, `AC3_BITRATE_BY_CHANNELS`, `DEFAULT_PRESET` / `DEFAULT_PRESET_DVD`, `RIP_RETRIES` (env `RNE_RIP_RETRIES`). Override via env vars where appropriate. Not pydantic. When the project grows past 10 settings, revisit. The one exception to "flat constants" is output-disk resolution (see "Output disks"): `load_disk_config()` parses the optional TOML file into a `DiskConfig`, and `resolve_roots(disk=..., media_root=...)` returns a frozen `Roots(media_root, staging_root)` for one invocation. Both raise `ConfigError` on a malformed file or unknown disk name. `Roots` is threaded into `ingest.run()` / `queue.run()` as a parameter — no mutable module-level state.
+- **`config.py`** — flat module of constants. Things like `DB_PATH`, `STAGING_ROOT`, `MEDIA_ROOT`, default minlength, default ffprobe timeout, the flatpak HandBrake invocation prefix, `COPY_FRIENDLY_AUDIO_CODECS`, `AC3_BITRATE_BY_CHANNELS`, `DEFAULT_PRESET` / `DEFAULT_PRESET_DVD`, `RIP_RETRIES` (env `RNE_RIP_RETRIES`). Override via env vars where appropriate. Not pydantic. When the project grows past 10 settings, revisit. The exceptions to "flat constants" are the two things that come from the optional TOML file. First, output-disk resolution (see "Output disks"): `load_disk_config()` parses it into a `DiskConfig`, and `resolve_roots(disk=..., media_root=...)` returns a frozen `Roots(media_root, staging_root)` for one invocation. Both raise `ConfigError` on a malformed file or unknown disk name. `Roots` is threaded into `ingest.run()` / `queue.run()` as a parameter — no mutable module-level state. Second, notifications (see "Rip-complete notifications"): `load_notify_config()` parses `[notifications.mqtt]` into a `NotifyConfig(mqtt, skipped)`, where `mqtt` is a frozen `MqttConfig` or None and `skipped` explains a partially-filled table. It is a separate loader rather than a field on `DiskConfig` because `--media-root` short-circuits disk resolution without reading the file at all, and notifications must still be honoured on that path.
 - **`db.py`** — owns everything sqlite. Schema as a `SCHEMA_SQL` constant, `init_db()` that runs it idempotently, `connect()` that applies pragmas. Thin functions like `claim_next_job()`, `update_progress(...)`, `mark_done(...)`. No ORM. `sqlite3.Row` row factory. One-off queries can stay inline at the call site.
 - **`models.py`** — dataclasses mirroring the columns, with `from_row(row)` classmethods. `JobStatus` is a `StrEnum`. `HandbrakeArgs` and the nested `AudioTrack` dataclass with `to_json()` / `from_json()`.
 - **`handbrake.py`** — pure. Takes a `HandbrakeArgs` and source path, returns `["HandBrakeCLI", "-i", ...]`. No subprocess, no DB, no I/O. The flatpak prefix from `config.py` is prepended here. Validates `AudioTrack` entries: bitrate required when codec != "copy", rejected when codec == "copy". `source_path` may point outside `/mnt/media/staging/` for jobs created via `rne queue` — this is valid and expected.
 - **`cli/_pipeline.py`** — shared interactive pipeline helpers used by both `ingest.py` and `queue.py`: probe-table display, `build_preview`, mismatch detection, `prompt_metadata`, `prompt_encoding_config`, `preview_and_confirm`, `create_batch_row`, `insert_jobs`, the `$EDITOR` round-trip, and the disc-split interactive flow (`prompt_disc_split`, `_disc_split_confirm_loop`, `_build_disc_split_jobs`).
 - **`cli/disc_split.py`** — pure algorithmic module (no I/O) for multi-episode disc splitting: `Episode` dataclass, `autodetect` (greedy ±35% duration grouping), `groups_to_episodes`, `fixed_split`, `manual_entry`.
 - **`probe.py`** — port of `mkvprobe-format.py`. `summarize(mkv_path) → StreamSummary`. The `AudioStream` summary includes `codec`, `channels`, `bitrate`, `language`, `title`, `default`, `forced`. Also provides `Chapter` dataclass and `probe_chapters(mkv_path)` for multi-episode disc mode. The table-printing logic moves into `cli/ingest.py`.
+- **`notify.py`** — a hand-rolled MQTT 3.1.1 publisher: connect, publish one message, disconnect. No dependency, because that is the entire protocol surface needed — no subscribe, no reconnect, no session state, no MQTT 5 — and `paho-mqtt` would be the second runtime dep for ~40 lines saved. Packet construction (`connect_packet`, `publish_packet`, `encode_remaining_length`, `render`) is pure and unit-tested; `publish()` does the socket work and raises `NotifyError`; `send()` wraps both, catches everything, and returns a `Result(ok, detail)` for the caller to print. QoS 0 and 1 only — QoS 2's four-packet handshake buys nothing for a notification, and the config layer rejects `qos = 2` rather than silently downgrading. Verified byte-for-byte against `paho-mqtt` over a real socket for the anonymous-QoS-0 and authenticated-QoS-1-with-retain cases.
 - **`makemkv.py`** — port of `mkvrip`'s parser (the `parse_info`, `summarize`, `parse_index_spec` functions). The interactive prompting moves into `cli/ingest.py`.
 - **`worker/runner.py`** — `subprocess.Popen` of HandBrake, parses progress, captures stderr ring buffer, handles `.partial` rename.
 - **`worker/daemon.py`** — main loop. Reconcile orphans → loop forever: check pause, claim, run, repeat.
@@ -415,7 +470,7 @@ rne/
 ```toml
 [project]
 name = "rne"
-version = "0.3.0"
+version = "0.4.0"
 requires-python = ">=3.12"
 dependencies = ["flask>=3.0"]
 
@@ -431,9 +486,9 @@ build-backend = "hatchling.build"
 
 ### Dependencies
 
-- **Runtime**: `flask` only.
+- **Runtime**: `flask` only. Notifications speak MQTT over a plain `socket` rather than adding `paho-mqtt` — see `notify.py` under "Module ownership".
 - **Dev**: `pytest`, `ruff`.
-- **Stdlib covers**: `sqlite3`, `subprocess`, `argparse`, `dataclasses`, `pathlib`, `signal`, `threading`, `re`, `json`.
+- **Stdlib covers**: `sqlite3`, `subprocess`, `argparse`, `dataclasses`, `pathlib`, `signal`, `threading`, `re`, `json`, `tomllib`, `socket`, `ssl`, `struct`.
 - **External binaries**: `makemkvcon`, `HandBrakeCLI` (via flatpak), `ffprobe`. Optional: `mkvmerge` from `mkvtoolnix-cli` as a fallback for subtitle metadata if `ffprobe` proves flaky on some discs.
 
 The whole thing fits in a venv with maybe 3 MB of installed packages.
@@ -603,6 +658,32 @@ Title 5 failed. Abort the whole ingest, retry the title, or skip and continue? [
 `r` re-attempts the rip once; if it fails again the same prompt reappears (automatic retries do not reset). Never silently queue a partial batch.
 
 The rip manifest is the authoritative record of which file belongs to which title. Raw filenames are whatever makemkv produces — the only assumption rne makes is that exactly one new `*.mkv` file appears per rip.
+
+### Step 4a — Rip-complete notification
+
+Fired once the rip manifest is known non-empty, before the probe in step 5. This is the moment worth being told about: the drive has spun down, the disc can be swapped, and everything after it is interactive. Firing before the probe rather than after means the phone buzzes a few seconds sooner and never waits on `ffprobe`.
+
+Skipped entirely when `[notifications.mqtt]` is absent (see "Rip-complete notifications"). Otherwise `notify.send()` renders the configured topic and payload and publishes one message. Placeholders available to both:
+
+| Placeholder | Value |
+|---|---|
+| `{disc}` | MakeMKV volume name, e.g. `INITIAL_D_VOL3` |
+| `{title}` | Show or movie name as entered in step 3 |
+| `{kind}` | `tv` or `movie` |
+| `{season}` | Season number, empty for movies |
+| `{count}` | Titles successfully ripped |
+| `{batch}` | `ingest_batches.id` |
+| `{hostname}` | Host running rne |
+
+Exactly one line is printed either way, and the flow proceeds to step 5 regardless:
+
+```
+Notification sent: rne/rip -> homeassistant.local:1883
+Notification failed: 10.0.0.5:1883: [Errno 111] Connection refused
+Notification skipped: [notifications.mqtt] is missing 'topic'.
+```
+
+The publish is synchronous but bounded by `timeout` (default 5s, applied to connect and to each read), so the worst case is a short pause before the step-6 prompts rather than a hung CLI. It is deliberately *not* backgrounded: a thread would print its result at an unpredictable moment, quite possibly in the middle of the user typing a track selection.
 
 ### Step 5 — Probe the first ripped file
 

@@ -4,7 +4,7 @@ import pathlib
 import subprocess
 import sys
 
-from rne import config, db, makemkv
+from rne import config, db, makemkv, notify
 from rne.cli._pipeline import (
     create_batch_row,
     insert_jobs,
@@ -159,12 +159,45 @@ def _rip_title_with_retries(
 
 
 # ---------------------------------------------------------------------------
+# Rip-complete notification
+# ---------------------------------------------------------------------------
+
+
+def _load_notify_config_or_exit() -> config.NotifyConfig:
+    """Read [notifications] up front, so a typo fails before the disc spins up."""
+    try:
+        return config.load_notify_config()
+    except config.ConfigError as exc:
+        print(f"Config error: {exc}", file=sys.stderr)
+        raise SystemExit(2) from None
+
+
+def _notify_rip_complete(cfg: config.NotifyConfig, **values: object) -> None:
+    """Best-effort 'the disc is done' push. Never raises, never blocks for long.
+
+    Reports either way and returns: the user is standing by to answer the track
+    prompts, and a broker that is down is not their problem right now.
+    """
+    if cfg.mqtt is None:
+        if cfg.skipped:
+            print(f"\nNotification skipped: {cfg.skipped}.")
+        return
+
+    result = notify.send(cfg.mqtt, values)
+    if result.ok:
+        print(f"\nNotification sent: {result.detail}")
+    else:
+        print(f"\nNotification failed: {result.detail}", file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
 # Main ingest flow
 # ---------------------------------------------------------------------------
 
 
 def run(args, roots: config.Roots) -> None:
     minlength: int = args.minlength
+    notify_cfg = _load_notify_config_or_exit()
 
     # ---- Step 1: disc detection ------------------------------------------------
     try:
@@ -268,6 +301,18 @@ def run(args, roots: config.Roots) -> None:
     if not rip_manifest:
         print("No titles survived. Aborting.", file=sys.stderr)
         sys.exit(1)
+
+    # The drive has spun down and everything from here on is interactive, so
+    # this is the moment worth being told about from the other room.
+    _notify_rip_complete(
+        notify_cfg,
+        disc=volume_name,
+        title=show if is_tv else movie,
+        kind="tv" if is_tv else "movie",
+        season=season,
+        count=len(rip_manifest),
+        batch=batch_id,
+    )
 
     surviving_episodes: list[int] | None = None
     if is_tv and not is_disc_split:

@@ -17,6 +17,11 @@ CONFIG_PATH: str = os.environ.get(
     str(Path.home() / ".config/rne/config.toml"),
 )
 
+# Defaults for the optional [notifications.mqtt] table; see load_notify_config().
+DEFAULT_MQTT_PORT = 1883
+DEFAULT_MQTT_PAYLOAD = "{title} rip complete"
+DEFAULT_MQTT_TIMEOUT = 5.0
+
 # flatpak run --command=HandBrakeCLI fr.handbrake.ghb <args>
 HANDBRAKE_PREFIX = ["flatpak", "run", "--command=HandBrakeCLI", "fr.handbrake.ghb"]
 
@@ -94,8 +99,21 @@ class DiskConfig:
 
 _EMPTY_DISK_CONFIG = DiskConfig(default_disk=None, disks={})
 
-_TOP_LEVEL_KEYS = frozenset({"default_disk", "disks"})
+_TOP_LEVEL_KEYS = frozenset({"default_disk", "disks", "notifications"})
 _DISK_KEYS = frozenset({"media_root", "staging_root"})
+
+
+def _read_toml(config_file: Path) -> dict | None:
+    """Parse the config file. Returns None when the file does not exist."""
+    try:
+        with config_file.open("rb") as fh:
+            return tomllib.load(fh)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise ConfigError(f"{config_file}: {exc.strerror or exc}") from exc
+    except tomllib.TOMLDecodeError as exc:
+        raise ConfigError(f"{config_file}: {exc}") from exc
 
 
 def default_roots() -> Roots:
@@ -143,15 +161,9 @@ def load_disk_config(path: str | Path | None = None) -> DiskConfig:
     """
     config_file = Path(path) if path is not None else Path(CONFIG_PATH)
 
-    try:
-        with config_file.open("rb") as fh:
-            data = tomllib.load(fh)
-    except FileNotFoundError:
+    data = _read_toml(config_file)
+    if data is None:
         return _EMPTY_DISK_CONFIG
-    except OSError as exc:
-        raise ConfigError(f"{config_file}: {exc.strerror or exc}") from exc
-    except tomllib.TOMLDecodeError as exc:
-        raise ConfigError(f"{config_file}: {exc}") from exc
 
     unknown = sorted(set(data) - _TOP_LEVEL_KEYS)
     if unknown:
@@ -182,6 +194,203 @@ def load_disk_config(path: str | Path | None = None) -> DiskConfig:
             )
 
     return DiskConfig(default_disk=default_disk, disks=disks)
+
+
+# ---------------------------------------------------------------------------
+# Notifications
+#
+# An optional [notifications.mqtt] table. Publishing "the disc is done" to an
+# MQTT broker is entirely opt-in: with no table, every command behaves exactly
+# as it did before. Topic and payload are user-owned strings — rne imposes no
+# schema on them beyond {placeholder} substitution (see notify.render).
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class MqttConfig:
+    """A resolved [notifications.mqtt] table, complete enough to publish with."""
+
+    host: str
+    topic: str
+    payload: str = DEFAULT_MQTT_PAYLOAD
+    port: int = DEFAULT_MQTT_PORT
+    username: str | None = None
+    password: str | None = None
+    client_id: str | None = None
+    qos: int = 0
+    retain: bool = False
+    tls: bool = False
+    tls_insecure: bool = False
+    timeout: float = DEFAULT_MQTT_TIMEOUT
+
+
+@dataclass(frozen=True)
+class NotifyConfig:
+    """Notification settings for one invocation.
+
+    `mqtt` is None when notifications are not set up. `skipped` carries a
+    human-readable reason in the one case worth mentioning out loud: the table
+    exists but is incomplete. Both None means there was nothing to configure.
+    """
+
+    mqtt: MqttConfig | None = None
+    skipped: str | None = None
+
+
+_EMPTY_NOTIFY_CONFIG = NotifyConfig()
+
+_NOTIFY_KEYS = frozenset({"mqtt"})
+_MQTT_KEYS = frozenset(
+    {
+        "host", "port", "topic", "payload", "username", "password",
+        "client_id", "qos", "retain", "tls", "tls_insecure", "timeout",
+    }
+)
+# Everything else has a usable default; without these two there is nowhere to
+# publish and nothing to publish to.
+_MQTT_REQUIRED = ("host", "topic")
+
+
+def _mqtt_str(raw: dict, key: str) -> str | None:
+    """Read an optional string key. Returns None when absent."""
+    if key not in raw:
+        return None
+    value = raw[key]
+    if not isinstance(value, str):
+        raise ConfigError(f"[notifications.mqtt]: {key} must be a string")
+    if not value:
+        raise ConfigError(f"[notifications.mqtt]: {key} must not be empty")
+    return value
+
+
+def _mqtt_bool(raw: dict, key: str, default: bool) -> bool:
+    if key not in raw:
+        return default
+    value = raw[key]
+    if not isinstance(value, bool):
+        raise ConfigError(f"[notifications.mqtt]: {key} must be true or false")
+    return value
+
+
+def _mqtt_int(raw: dict, key: str, default: int, *, low: int, high: int) -> int:
+    if key not in raw:
+        return default
+    value = raw[key]
+    # bool is an int subclass, so 'port = true' would otherwise read as port 1.
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ConfigError(f"[notifications.mqtt]: {key} must be an integer")
+    if not low <= value <= high:
+        raise ConfigError(
+            f"[notifications.mqtt]: {key} must be between {low} and {high} "
+            f"(got {value})"
+        )
+    return value
+
+
+def _mqtt_timeout(raw: dict, key: str, default: float) -> float:
+    if key not in raw:
+        return default
+    value = raw[key]
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ConfigError(f"[notifications.mqtt]: {key} must be a number")
+    if value <= 0:
+        raise ConfigError(f"[notifications.mqtt]: {key} must be greater than 0")
+    return float(value)
+
+
+def _parse_mqtt(raw: object) -> NotifyConfig:
+    if not isinstance(raw, dict):
+        raise ConfigError("[notifications.mqtt] must be a table")
+
+    unknown = sorted(set(raw) - _MQTT_KEYS)
+    if unknown:
+        raise ConfigError(
+            f"[notifications.mqtt]: unknown key(s): {', '.join(unknown)}"
+        )
+
+    # A missing key means "not set up yet" and is not an error — the caller
+    # skips notifying and carries on. A *wrong* key or a wrong type is a typo,
+    # and staying quiet about it would mean never being notified and never
+    # finding out why, which is the exact problem notifications exist to solve.
+    missing = [key for key in _MQTT_REQUIRED if key not in raw]
+    if missing:
+        return NotifyConfig(
+            skipped="[notifications.mqtt] is missing "
+                    + ", ".join(f"'{key}'" for key in missing)
+        )
+
+    host = raw["host"]
+    if not isinstance(host, str) or not host:
+        raise ConfigError("[notifications.mqtt]: host must be a non-empty string")
+
+    topic = raw["topic"]
+    if not isinstance(topic, str) or not topic:
+        raise ConfigError("[notifications.mqtt]: topic must be a non-empty string")
+    if "+" in topic or "#" in topic:
+        raise ConfigError(
+            "[notifications.mqtt]: topic must not contain the wildcards "
+            "'+' or '#' (those are for subscribing, not publishing)"
+        )
+
+    if "password" in raw and "username" not in raw:
+        raise ConfigError(
+            "[notifications.mqtt]: password is set without a username"
+        )
+
+    return NotifyConfig(
+        mqtt=MqttConfig(
+            host=host,
+            topic=topic,
+            payload=_mqtt_str(raw, "payload") or DEFAULT_MQTT_PAYLOAD,
+            port=_mqtt_int(raw, "port", DEFAULT_MQTT_PORT, low=1, high=65535),
+            username=_mqtt_str(raw, "username"),
+            password=_mqtt_str(raw, "password"),
+            client_id=_mqtt_str(raw, "client_id"),
+            # QoS 2's four-packet handshake buys nothing for a fire-and-forget
+            # notification, so the publisher implements 0 and 1 only.
+            qos=_mqtt_int(raw, "qos", 0, low=0, high=1),
+            retain=_mqtt_bool(raw, "retain", False),
+            tls=_mqtt_bool(raw, "tls", False),
+            tls_insecure=_mqtt_bool(raw, "tls_insecure", False),
+            timeout=_mqtt_timeout(raw, "timeout", DEFAULT_MQTT_TIMEOUT),
+        )
+    )
+
+
+def load_notify_config(path: str | Path | None = None) -> NotifyConfig:
+    """Load the [notifications] section of the config file.
+
+    A missing file, a missing section, or missing keys within it all yield a
+    NotifyConfig with `mqtt=None` — notifications are opt-in, and not opting in
+    is not an error. A section that exists but is malformed raises ConfigError
+    so the mistake surfaces at startup, before the disc starts spinning.
+    """
+    config_file = Path(path) if path is not None else Path(CONFIG_PATH)
+
+    data = _read_toml(config_file)
+    if data is None:
+        return _EMPTY_NOTIFY_CONFIG
+
+    raw_notify = data.get("notifications")
+    if raw_notify is None:
+        return _EMPTY_NOTIFY_CONFIG
+    if not isinstance(raw_notify, dict):
+        raise ConfigError(f"{config_file}: 'notifications' must be a table")
+
+    unknown = sorted(set(raw_notify) - _NOTIFY_KEYS)
+    if unknown:
+        raise ConfigError(
+            f"{config_file}: [notifications]: unknown key(s): "
+            f"{', '.join(unknown)} (supported transports: mqtt)"
+        )
+
+    if "mqtt" not in raw_notify:
+        return _EMPTY_NOTIFY_CONFIG
+
+    try:
+        return _parse_mqtt(raw_notify["mqtt"])
+    except ConfigError as exc:
+        raise ConfigError(f"{config_file}: {exc}") from None
 
 
 def resolve_roots(
