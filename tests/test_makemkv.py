@@ -16,6 +16,7 @@ from rne.makemkv import (
     extract_messages,
     parse_index_spec,
     parse_info,
+    parse_source,
     rip_and_detect,
     run_info,
     summarize,
@@ -196,6 +197,69 @@ def test_empty_parts_ignored():
 
 
 # ---------------------------------------------------------------------------
+# parse_source
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [("disc0", "disc:0"), ("disc1", "disc:1"), ("disc:2", "disc:2"), ("disc10", "disc:10")],
+)
+def test_parse_source_drive(value, expected):
+    assert parse_source(value) == expected
+
+
+def test_parse_source_directory_becomes_absolute_file_spec(tmp_path, monkeypatch):
+    (tmp_path / "BACKUP").mkdir()
+    monkeypatch.chdir(tmp_path)
+    assert parse_source("BACKUP") == f"file:{tmp_path.resolve() / 'BACKUP'}"
+
+
+def test_parse_source_drive_pattern_wins_over_same_named_dir(tmp_path, monkeypatch):
+    (tmp_path / "disc1").mkdir()
+    monkeypatch.chdir(tmp_path)
+    assert parse_source("disc1") == "disc:1"
+    assert parse_source("./disc1") == f"file:{tmp_path.resolve() / 'disc1'}"
+
+
+def test_parse_source_missing_path_raises(tmp_path):
+    with pytest.raises(ValueError, match="not a drive"):
+        parse_source(str(tmp_path / "nope"))
+
+
+@pytest.mark.parametrize("name", ["movie.iso", "MOVIE.ISO"])
+def test_parse_source_iso_becomes_absolute_iso_spec(name, tmp_path, monkeypatch):
+    (tmp_path / name).touch()
+    monkeypatch.chdir(tmp_path)
+    assert parse_source(name) == f"iso:{tmp_path.resolve() / name}"
+
+
+def test_parse_source_missing_iso_raises(tmp_path):
+    with pytest.raises(ValueError, match="not a drive"):
+        parse_source(str(tmp_path / "movie.iso"))
+
+
+def test_parse_source_non_iso_file_raises(tmp_path):
+    img = tmp_path / "movie.img"
+    img.touch()
+    with pytest.raises(ValueError):
+        parse_source(str(img))
+
+
+def test_parse_source_directory_named_iso_is_folder(tmp_path):
+    folder = tmp_path / "backup.iso"
+    folder.mkdir()
+    assert parse_source(str(folder)) == f"file:{folder.resolve()}"
+
+
+@pytest.mark.parametrize("value", ["disk1", "disc", "disc:", "disc-1", "disc:a"])
+def test_parse_source_malformed_drive_raises(value, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(ValueError):
+        parse_source(value)
+
+
+# ---------------------------------------------------------------------------
 # rip_and_detect
 # ---------------------------------------------------------------------------
 
@@ -209,9 +273,22 @@ def test_rip_and_detect_returns_new_file(tmp_path):
         new_file.touch()
 
     with patch("rne.makemkv.subprocess.run", side_effect=fake_run):
-        result = rip_and_detect(disc=0, title_idx=0, raw_dir=tmp_path)
+        result = rip_and_detect(source="disc:0", title_idx=0, raw_dir=tmp_path)
 
     assert result == new_file
+
+
+def test_rip_and_detect_passes_source_to_makemkvcon(tmp_path):
+    seen = []
+
+    def fake_run(cmd, **kwargs):
+        seen.append(cmd)
+        (tmp_path / "title.mkv").touch()
+
+    with patch("rne.makemkv.subprocess.run", side_effect=fake_run):
+        rip_and_detect(source="file:/backups/MOVIE", title_idx=3, raw_dir=tmp_path)
+
+    assert seen[0][2:5] == ["mkv", "file:/backups/MOVIE", "3"]
 
 
 def test_rip_and_detect_no_new_file_raises(tmp_path):
@@ -220,7 +297,7 @@ def test_rip_and_detect_no_new_file_raises(tmp_path):
 
     with patch("rne.makemkv.subprocess.run", side_effect=fake_run):
         with pytest.raises(MakemkvError):
-            rip_and_detect(disc=0, title_idx=0, raw_dir=tmp_path)
+            rip_and_detect(source="disc:0", title_idx=0, raw_dir=tmp_path)
 
 
 def test_rip_and_detect_multiple_new_files_raises(tmp_path):
@@ -230,7 +307,7 @@ def test_rip_and_detect_multiple_new_files_raises(tmp_path):
 
     with patch("rne.makemkv.subprocess.run", side_effect=fake_run):
         with pytest.raises(MakemkvError):
-            rip_and_detect(disc=0, title_idx=0, raw_dir=tmp_path)
+            rip_and_detect(source="disc:0", title_idx=0, raw_dir=tmp_path)
 
 
 def test_rip_and_detect_nonzero_exit_raises(tmp_path):
@@ -239,7 +316,7 @@ def test_rip_and_detect_nonzero_exit_raises(tmp_path):
 
     with patch("rne.makemkv.subprocess.run", side_effect=fake_run):
         with pytest.raises(subprocess.CalledProcessError):
-            rip_and_detect(disc=0, title_idx=0, raw_dir=tmp_path)
+            rip_and_detect(source="disc:0", title_idx=0, raw_dir=tmp_path)
 
 
 # ---------------------------------------------------------------------------
@@ -282,7 +359,7 @@ def test_run_info_nonzero_exit_reports_stdout_messages(capsys):
         return_value=_completed(1, stdout=EXPIRED_KEY_OUTPUT, stderr=""),
     ):
         with pytest.raises(subprocess.CalledProcessError):
-            run_info(disc=0, minlength=900)
+            run_info(source="disc:0", minlength=900)
     err = capsys.readouterr().err
     assert "Evaluation period has expired." in err
 
@@ -290,7 +367,7 @@ def test_run_info_nonzero_exit_reports_stdout_messages(capsys):
 def test_run_info_nonzero_exit_with_no_output_still_says_something(capsys):
     with patch("rne.makemkv.subprocess.run", return_value=_completed(3)):
         with pytest.raises(subprocess.CalledProcessError):
-            run_info(disc=0, minlength=900)
+            run_info(source="disc:0", minlength=900)
     assert "exited 3" in capsys.readouterr().err
 
 
@@ -300,7 +377,7 @@ def test_run_info_nonzero_exit_reports_stderr_when_present(capsys):
         return_value=_completed(1, stderr="segfault"),
     ):
         with pytest.raises(subprocess.CalledProcessError):
-            run_info(disc=0, minlength=900)
+            run_info(source="disc:0", minlength=900)
     assert "segfault" in capsys.readouterr().err
 
 
@@ -309,9 +386,18 @@ def test_run_info_zero_exit_no_titles_reports_messages(capsys):
         "rne.makemkv.subprocess.run",
         return_value=_completed(0, stdout=EXPIRED_KEY_OUTPUT),
     ):
-        disc_info, titles = run_info(disc=0, minlength=900)
+        disc_info, titles = run_info(source="disc:0", minlength=900)
     assert titles == {}
     assert "Evaluation period has expired." in capsys.readouterr().err
+
+
+def test_run_info_passes_source_to_makemkvcon(sample_output):
+    with patch(
+        "rne.makemkv.subprocess.run",
+        return_value=_completed(0, stdout=sample_output),
+    ) as run:
+        run_info(source="disc:1", minlength=900)
+    assert run.call_args.args[0][-2:] == ["info", "disc:1"]
 
 
 def test_run_info_success_is_quiet(capsys, sample_output):
@@ -319,7 +405,7 @@ def test_run_info_success_is_quiet(capsys, sample_output):
         "rne.makemkv.subprocess.run",
         return_value=_completed(0, stdout=sample_output),
     ):
-        disc_info, titles = run_info(disc=0, minlength=900)
+        disc_info, titles = run_info(source="disc:0", minlength=900)
     assert titles
     # Only the echoed command line, no message spam on the happy path.
     assert capsys.readouterr().err.count("\n") == 1

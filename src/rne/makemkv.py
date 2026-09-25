@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import io
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -101,6 +102,35 @@ def summarize(tid: int, title: dict) -> dict:
     }
 
 
+_DRIVE_RE = re.compile(r"disc:?(\d+)")
+
+
+def parse_source(value: str) -> str:
+    """Turn a user-facing source into a makemkvcon source spec.
+
+    'disc1' / 'disc:1' -> 'disc:1' (optical drive by index). Anything else is
+    taken as a path: a disc backup folder (VIDEO_TS / BDMV, e.g. from
+    dvdbackup) -> 'file:/abs/path', or a disc image ending in .iso ->
+    'iso:/abs/path'. The drive pattern wins, so a path that happens to be
+    named 'disc1' needs a form like './disc1'.
+
+    Raises ValueError if the value is not a drive, an existing directory, or
+    an existing .iso file.
+    """
+    m = _DRIVE_RE.fullmatch(value)
+    if m:
+        return f"disc:{int(m.group(1))}"
+    path = pathlib.Path(value).expanduser()
+    if path.is_dir():
+        return f"file:{path.resolve()}"
+    if path.is_file() and path.suffix.lower() == ".iso":
+        return f"iso:{path.resolve()}"
+    raise ValueError(
+        f"{value!r} is not a drive (disc0, disc:1, ...), an existing directory, "
+        "or an existing .iso file"
+    )
+
+
 def parse_index_spec(spec: str) -> list[int] | None:
     """Parse '0-3,5,7' / '0 1 2' / 'all' into a sorted list. Returns None for 'all'."""
     spec = spec.strip().lower()
@@ -140,12 +170,13 @@ def extract_messages(output: str) -> list[str]:
     return messages
 
 
-def run_info(disc: int, minlength: int) -> tuple[dict, dict]:
+def run_info(source: str, minlength: int) -> tuple[dict, dict]:
     """Run makemkvcon info and return (disc_info, titles).
 
+    source is a makemkvcon source spec as returned by parse_source.
     Raises subprocess.CalledProcessError on non-zero exit.
     """
-    cmd = ["makemkvcon", "-r", f"--minlength={minlength}", "info", f"disc:{disc}"]
+    cmd = ["makemkvcon", "-r", f"--minlength={minlength}", "info", source]
     print(f"$ {' '.join(cmd)}", file=sys.stderr)
     result = subprocess.run(cmd, capture_output=True, text=True)
     # Report messages on any unhappy path. stderr alone is not enough: in robot
@@ -180,7 +211,7 @@ class MakemkvError(Exception):
 
 
 def rip_and_detect(
-    disc: int, title_idx: int, raw_dir: pathlib.Path, minlength: int = 900
+    source: str, title_idx: int, raw_dir: pathlib.Path, minlength: int = 900
 ) -> pathlib.Path:
     """Rip one title and return the path of the newly created MKV.
 
@@ -188,15 +219,15 @@ def rip_and_detect(
     predict what filename makemkv chose.  Raises subprocess.CalledProcessError
     on non-zero exit, MakemkvError if exactly one new *.mkv did not appear.
 
-    minlength must match the value passed to run_info so title indices are
-    consistent between the two commands.
+    source and minlength must match the values passed to run_info so title
+    indices are consistent between the two commands.
     """
     before = set(raw_dir.glob("*.mkv"))
     cmd = [
         "makemkvcon",
         f"--minlength={minlength}",
         "mkv",
-        f"disc:{disc}",
+        source,
         str(title_idx),
         str(raw_dir),
     ]

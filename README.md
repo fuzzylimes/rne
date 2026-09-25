@@ -17,10 +17,10 @@ See [docs/install.md](docs/install.md) for the full prerequisite checklist and s
 ```bash
 # Build on Mac, copy wheel to VM
 uv build
-rsync -av dist/rne-0.4.0-py3-none-any.whl rip@rip:~/
+rsync -av dist/rne-0.5.0-py3-none-any.whl rip@rip:~/
 
 # On VM: install and set up services
-pipx install ~/rne-0.4.0-py3-none-any.whl
+pipx install ~/rne-0.5.0-py3-none-any.whl
 rne service install
 loginctl enable-linger rip
 systemctl --user enable --now rne-worker rne-dashboard
@@ -44,6 +44,16 @@ The CLI walks through title detection, content classification (TV or movie), nam
 
 The `--minlength` / `-m` value is passed to both the title-listing and ripping steps so that title indices are always consistent between the two.
 
+By default rne reads from the first optical drive (`disc:0`). Use `--source` to read from somewhere else:
+
+```bash
+rne ingest --source disc1                   # second optical drive (disc:1 also works)
+rne ingest --source ~/backups/MY_DISC       # disc backup folder, e.g. from dvdbackup
+rne ingest --source ~/images/MY_DISC.iso    # disc image (must end in .iso)
+```
+
+A folder is handed to makemkvcon as `file:<path>`, and an `.iso` file as `iso:<path>`. That helps with discs MakeMKV can't read directly: copy the disc with `dvdbackup -M -i /dev/sr0 -o ~/backups` and then point `--source` at the folder it creates. A path literally named `disc1` would be read as a drive, so write it as `./disc1`.
+
 To write the output to a different drive, see [Choosing an output disk](#choosing-an-output-disk).
 
 Metadata can be pre-supplied on the command line to skip the corresponding prompts:
@@ -61,7 +71,7 @@ Providing `-sn` or `-fe` implies TV episodes, so the content-type prompt is skip
 
 Example session flow:
 
-1. Title list from `makemkvcon -r --minlength=900 info disc:0` — sorted by `.mpls` source name so episodes appear in the correct order regardless of how the publisher arranged them on disc. The `#` column is the display index; `Disc Index` shows the underlying MakeMKV title number.
+1. Title list from `makemkvcon -r --minlength=900 info disc:0` (or whatever `--source` points at) — sorted by `.mpls` source name so episodes appear in the correct order regardless of how the publisher arranged them on disc. The `#` column is the display index; `Disc Index` shows the underlying MakeMKV title number.
 2. Select titles by display `#`: `0-7`, `0,2,4`, `all`, or empty to abort
 3. TV or Movie? → if TV with exactly one title selected, asks about multi-episode disc mode first (see below), then prompts for show/season/starting episode; if movie, prompts for title
 4. Confirm staging directory, then rip
@@ -342,7 +352,7 @@ Raw files are kept in `_raw/batch-{id}/` under the show/movie staging directory,
 uv sync             # install deps including dev group
 uv run pytest       # run tests
 uv run ruff check   # lint
-uv build            # build wheel → dist/rne-0.4.0-py3-none-any.whl
+uv build            # build wheel → dist/rne-0.5.0-py3-none-any.whl
 ```
 
 Tests use in-memory SQLite; no external binaries required.

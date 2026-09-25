@@ -470,7 +470,7 @@ rne/
 ```toml
 [project]
 name = "rne"
-version = "0.4.0"
+version = "0.5.0"
 requires-python = ">=3.12"
 dependencies = ["flask>=3.0"]
 
@@ -537,7 +537,15 @@ The user runs this once per disc.
 
 ### Step 1 — Disc detection
 
-Run `makemkvcon -r --minlength=<N> info disc:0`, where N defaults to 900 seconds and is overridable via `rne ingest -m <N>`. On failure (no disc, drive busy), print stderr verbatim and exit non-zero. On success, print the disc volume name and the title table.
+Run `makemkvcon -r --minlength=<N> info <source>`, where N defaults to 900 seconds and is overridable via `rne ingest -m <N>`. On failure (no disc, drive busy), print stderr verbatim and exit non-zero. On success, print the disc volume name and the title table.
+
+`<source>` defaults to `disc:0` (the first optical drive) and is chosen with `rne ingest --source SOURCE`:
+
+- **`discN` / `disc:N`** — optical drive N, passed to makemkvcon as `disc:N`.
+- **A directory path** — a disc backup folder (`VIDEO_TS` / `BDMV` structure), passed as `file:<absolute path>`. This is the escape hatch for discs MakeMKV cannot read directly: pull the content off with something like `dvdbackup` first, then point `rne ingest` at the result.
+- **A path to an `.iso` file** — a disc image, passed as `iso:<absolute path>`. The extension check is case-insensitive (`.iso` or `.ISO`); any other file is rejected rather than guessed at.
+
+The drive pattern is checked first, so a path that happens to be named `disc1` must be given in a form such as `./disc1`. A directory is always treated as a backup folder, even if its name ends in `.iso`. Anything that is not a drive, an existing directory, or an existing `.iso` file is rejected by argparse (exit 2) before makemkvcon runs. `makemkv.parse_source()` does the translation; `run_info` and `rip_and_detect` take the resulting spec, and the same spec is used for step 1 and every rip in step 4 so title indices stay consistent.
 
 The title table is sorted by `.mpls` source filename (ascending) rather than by the raw disc title index. The `#` column is the sequential display index in that sorted order. A `Disc Index` column shows the underlying disc title number used internally by MakeMKV. This ensures that on discs where publishers have stored episodes out of sequential order, the table naturally presents titles in correct episode order.
 
@@ -579,6 +587,7 @@ Metadata can be pre-supplied via CLI flags, skipping the corresponding prompts:
 - `-n` / `--name` — show or movie name.
 - `-sn` / `--season` — season number (0 for specials). TV only.
 - `-fe` / `--first-episode` — first episode number. TV only.
+- `--source` — what to rip from; see step 1. Affects where titles are read from, not the metadata prompts.
 - `-dk` / `--disk`, `--media-root` — output location; see "Output disks". These
   affect step 4 rather than the metadata prompts, and are mutually exclusive.
 
@@ -645,7 +654,7 @@ Rip to /mnt/media/staging/Initial D/_raw/batch-7/ [Y/n]:
 Then, for each selected title **in `.mpls` display order** (i.e. the order the disc indexes appear after the step-1 sort):
 
 a. Snapshot `before = set(raw_dir.glob("*.mkv"))`.
-b. Run `makemkvcon --minlength=<N> mkv` for this title, using the **same `--minlength` value as step 1**. MakeMKV re-numbers title indices based on the minlength filter, so using a different value here would cause the wrong title to be ripped. stdout streams to the terminal so the user sees progress bars.
+b. Run `makemkvcon --minlength=<N> mkv <source>` for this title, using the **same `--minlength` and source as step 1**. MakeMKV re-numbers title indices based on the minlength filter, so using a different value here would cause the wrong title to be ripped. stdout streams to the terminal so the user sees progress bars.
 c. Snapshot `after = set(raw_dir.glob("*.mkv"))`. Compute `new = after - before`. If `len(new) != 1`, abort with a clear error showing what is in the dir.
 d. Append `(title_idx, new_file_path)` to the **rip manifest** — an in-memory ordered list of `(title_idx, Path)` pairs that maps disc-title order to actual filenames.
 

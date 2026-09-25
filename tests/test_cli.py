@@ -579,6 +579,34 @@ def test_parser_ingest_non_numeric_season_rejected():
         _build_parser().parse_args(["ingest", "-sn", "one"])
 
 
+def test_parser_ingest_source_defaults_to_first_drive():
+    args = _build_parser().parse_args(["ingest"])
+    assert args.source == "disc:0"
+
+
+def test_parser_ingest_source_drive():
+    args = _build_parser().parse_args(["ingest", "--source", "disc1"])
+    assert args.source == "disc:1"
+
+
+def test_parser_ingest_source_directory(tmp_path):
+    args = _build_parser().parse_args(["ingest", "--source", str(tmp_path)])
+    assert args.source == f"file:{tmp_path.resolve()}"
+
+
+def test_parser_ingest_source_iso(tmp_path):
+    iso = tmp_path / "movie.iso"
+    iso.touch()
+    args = _build_parser().parse_args(["ingest", "--source", str(iso)])
+    assert args.source == f"iso:{iso.resolve()}"
+
+
+def test_parser_ingest_source_missing_path_rejected(tmp_path, capsys):
+    with pytest.raises(SystemExit):
+        _build_parser().parse_args(["ingest", "--source", str(tmp_path / "nope")])
+    assert "not a drive" in capsys.readouterr().err
+
+
 def test_parser_ls_defaults():
     args = _build_parser().parse_args(["ls"])
     assert args.command == "ls"
@@ -1056,7 +1084,7 @@ _RIPPED = pathlib.Path("/staging/_raw/batch-1/title_t00.mkv")
 
 def _rip_kwargs() -> dict:
     return {
-        "disc": 0,
+        "source": "disc:0",
         "raw_dir": pathlib.Path("/staging/_raw/batch-1"),
         "minlength": 900,
     }

@@ -113,7 +113,7 @@ def _build_jobs_plan(
 def _rip_title_with_retries(
     title_idx: int,
     *,
-    disc: int,
+    source: str,
     raw_dir: pathlib.Path,
     minlength: int,
     auto_retries: int,
@@ -128,7 +128,7 @@ def _rip_title_with_retries(
     while True:
         try:
             return makemkv.rip_and_detect(
-                disc=disc, title_idx=title_idx, raw_dir=raw_dir, minlength=minlength
+                source=source, title_idx=title_idx, raw_dir=raw_dir, minlength=minlength
             )
         except (subprocess.CalledProcessError, makemkv.MakemkvError):
             if attempt < auto_retries:
@@ -197,11 +197,12 @@ def _notify_rip_complete(cfg: config.NotifyConfig, **values: object) -> None:
 
 def run(args, roots: config.Roots) -> None:
     minlength: int = args.minlength
+    source: str = args.source
     notify_cfg = _load_notify_config_or_exit()
 
     # ---- Step 1: disc detection ------------------------------------------------
     try:
-        disc_info, titles = makemkv.run_info(disc=0, minlength=minlength)
+        disc_info, titles = makemkv.run_info(source=source, minlength=minlength)
     except subprocess.CalledProcessError:
         sys.exit(1)
 
@@ -290,7 +291,7 @@ def run(args, roots: config.Roots) -> None:
     for title_idx in selected_indexes:
         file_path = _rip_title_with_retries(
             title_idx,
-            disc=0,
+            source=source,
             raw_dir=raw_dir,
             minlength=minlength,
             auto_retries=config.RIP_RETRIES,

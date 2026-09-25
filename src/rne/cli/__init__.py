@@ -23,6 +23,15 @@ def _episode_number(value: str) -> int:
     return n
 
 
+def _rip_source(value: str) -> str:
+    from rne import makemkv
+
+    try:
+        return makemkv.parse_source(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc))
+
+
 def _add_disk_flags(parser: argparse.ArgumentParser) -> None:
     """Add the mutually exclusive output-location flags to a subparser."""
     group = parser.add_mutually_exclusive_group()
@@ -53,6 +62,14 @@ def _build_parser() -> argparse.ArgumentParser:
         default=900,
         metavar="SECONDS",
         help="Minimum title length in seconds (default: 900)",
+    )
+    ingest_p.add_argument(
+        "--source",
+        type=_rip_source,
+        default="disc:0",
+        metavar="SOURCE",
+        help="What to rip from: a drive (disc0, disc1, ...), a disc backup "
+             "folder (e.g. from dvdbackup), or an .iso image (default: disc0)",
     )
     ingest_p.add_argument(
         "-n", "--name",
