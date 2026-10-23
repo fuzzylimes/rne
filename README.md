@@ -292,7 +292,10 @@ rne resume             # resume
 
 rne cancel <id>        # remove a queued job (terminal, CLI only)
 rne retry <id>         # re-queue any terminal-state job
-rne edit <id>          # edit handbrake_args JSON in $EDITOR
+rne edit               # pick a job from a list, then edit it
+rne edit <id>          # edit one job: name, season/episode, tracks, encode settings
+rne edit --batch <n>   # edit every job from one disc at once (e.g. fix the first episode)
+rne edit <id> --raw    # edit handbrake_args JSON in $EDITOR (old behaviour)
 ```
 
 Pause/resume/retry are also available as buttons on the dashboard.

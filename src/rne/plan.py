@@ -291,3 +291,121 @@ def movie_job(
         "handbrake_args": args,
         "layout_warning": False,
     }
+
+
+# ---------------------------------------------------------------------------
+# Editable track rows
+#
+# Every track in the source becomes a row a form can show. Included rows carry
+# the job's choices; the others carry the recommendation, so ticking one gives
+# a sensible codec straight away. Used by the TUI and the dashboard form.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class AudioRow:
+    track: int  # 1-based source stream index
+    label: str
+    include: bool
+    codec: str  # "copy" or a HandBrake audio encoder
+    bitrate: int | None  # kbps when transcoding
+    recommended_bitrate: int
+
+
+@dataclass
+class SubtitleRow:
+    track: int
+    label: str
+    include: bool
+    default: bool
+
+
+def _missing_label(track: int) -> str:
+    return f"{track}: not in source file"
+
+
+def audio_rows(summary: StreamSummary, args: HandbrakeArgs) -> list[AudioRow]:
+    """Included tracks first, in playback order; then the rest in source order."""
+    rows: list[AudioRow] = []
+    chosen = {t.track for t in args.audio_tracks}
+    for t in args.audio_tracks:
+        stream = summary.audio[t.track - 1] if t.track <= len(summary.audio) else None
+        rows.append(AudioRow(
+            track=t.track,
+            label=audio_label(t.track, stream) if stream else _missing_label(t.track),
+            include=True,
+            codec=t.codec,
+            bitrate=t.bitrate,
+            recommended_bitrate=recommended_ac3_bitrate(stream) if stream else 640,
+        ))
+    for n, stream in enumerate(summary.audio, 1):
+        if n in chosen:
+            continue
+        rec = recommended_audio(stream, n)
+        rows.append(AudioRow(
+            track=n,
+            label=audio_label(n, stream),
+            include=False,
+            codec=rec.codec,
+            bitrate=rec.bitrate,
+            recommended_bitrate=recommended_ac3_bitrate(stream),
+        ))
+    return rows
+
+
+def subtitle_rows(summary: StreamSummary, args: HandbrakeArgs) -> list[SubtitleRow]:
+    """Source order, then any chosen tracks the source doesn't have."""
+    chosen = {s.track: s for s in args.subtitle_tracks}
+    rows = [
+        SubtitleRow(
+            track=n,
+            label=subtitle_label(n, stream),
+            include=n in chosen,
+            default=n in chosen and chosen[n].default,
+        )
+        for n, stream in enumerate(summary.subtitle, 1)
+    ]
+    for track, s in chosen.items():
+        if track > len(summary.subtitle):
+            rows.append(SubtitleRow(track, _missing_label(track), True, s.default))
+    return rows
+
+
+def args_from_rows(
+    base: HandbrakeArgs,
+    audio: list[AudioRow],
+    subtitles: list[SubtitleRow],
+    *,
+    quality: int,
+    preset: str,
+    tune: str | None,
+    detelecine: bool,
+    decomb: bool,
+) -> HandbrakeArgs:
+    """Build settings from form rows. Keeps base's encoder, extra args and chapters.
+
+    Raises ValueError if a row is inconsistent (e.g. a non-positive bitrate).
+    """
+    audio_tracks = [
+        AudioTrack(track=r.track, codec="copy")
+        if r.codec == "copy"
+        else AudioTrack(track=r.track, codec=r.codec, bitrate=r.bitrate or r.recommended_bitrate)
+        for r in audio
+        if r.include
+    ]
+    subtitle_tracks = [
+        SubtitleTrack(track=r.track, default=r.default) for r in subtitles if r.include
+    ]
+    return HandbrakeArgs(
+        encoder=base.encoder,
+        quality=quality,
+        preset=preset,
+        audio_tracks=audio_tracks,
+        subtitle_tracks=subtitle_tracks,
+        detelecine=detelecine,
+        decomb=decomb,
+        tune=tune,
+        extra_args=list(base.extra_args),
+        chapter_start=base.chapter_start,
+        chapter_end=base.chapter_end,
+    )

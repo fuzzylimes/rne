@@ -114,8 +114,20 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Filter by status (comma-separated)",
     )
 
-    edit_p = sub.add_parser("edit", help="Edit a job's HandBrake args in $EDITOR")
-    edit_p.add_argument("id", type=int, help="Job ID")
+    edit_p = sub.add_parser(
+        "edit",
+        help="Edit a job's naming and settings (no ID: pick from a list)",
+    )
+    edit_target = edit_p.add_mutually_exclusive_group()
+    edit_target.add_argument("id", type=int, nargs="?", help="Job ID")
+    edit_target.add_argument(
+        "-b", "--batch", type=int, metavar="N",
+        help="Edit every job in batch N at once",
+    )
+    edit_p.add_argument(
+        "--raw", action="store_true",
+        help="Edit the job's HandBrake args as JSON in $EDITOR (needs ID)",
+    )
 
     cancel_p = sub.add_parser("cancel", help="Cancel a queued job (terminal)")
     cancel_p.add_argument("id", type=int, help="Job ID")

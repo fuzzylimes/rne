@@ -506,7 +506,7 @@ rne/
 name = "rne"
 version = "0.5.0"
 requires-python = ">=3.12"
-dependencies = ["flask>=3.0"]
+dependencies = ["flask>=3.0", "textual>=8.2"]
 
 [project.scripts]
 rne = "rne.cli:main"
@@ -520,7 +520,7 @@ build-backend = "hatchling.build"
 
 ### Dependencies
 
-- **Runtime**: `flask` only. Notifications speak MQTT over a plain `socket` rather than adding `paho-mqtt` — see `notify.py` under "Module ownership".
+- **Runtime**: `flask` (dashboard) and `textual` (terminal UI, added in v0.6; pulls in `rich`). Both are pure-Python wheels, so the build-wheel → `pipx install` flow is unchanged. Notifications speak MQTT over a plain `socket` rather than adding `paho-mqtt` — see `notify.py` under "Module ownership".
 - **Dev**: `pytest`, `ruff`.
 - **Stdlib covers**: `sqlite3`, `subprocess`, `argparse`, `dataclasses`, `pathlib`, `signal`, `threading`, `re`, `json`, `tomllib`, `socket`, `ssl`, `struct`.
 - **External binaries**: `makemkvcon`, `HandBrakeCLI` (via flatpak), `ffprobe`. Optional: `mkvmerge` from `mkvtoolnix-cli` as a fallback for subtitle metadata if `ffprobe` proves flaky on some discs.
@@ -831,7 +831,14 @@ CLI exits. The worker (running independently under systemd) claims the first job
 
 - **`rne disks`** — list the disks defined in the config file, marking the one used when `-dk` is omitted and showing whether each `media_root` is mounted. With no config file, prints the built-in defaults and an example config. Exits 2 on a malformed config file, same as the ingest paths.
 - **`rne ls`** — list jobs with status, optionally filtered. `--all` shows full history. Default shows queued + running + recent terminal states.
-- **`rne edit <id>`** — opens that job's `handbrake_args` JSON in `$EDITOR`. On save, validates and writes back. **Refuses to edit a `running` job** with a non-zero exit. Editing other states (queued, paused, failed, interrupted, cancelled, done) is allowed. Validation criteria (all must pass; on failure the user is offered a chance to re-open the editor):
+- **`rne edit`** (v0.6) — full-screen Textual editor (`tui/edit.py`). `rne edit` with no ID opens a picker: every job except `running` ones, the queue first in run order, then history. Enter edits the highlighted job and `b` edits its whole batch. `rne edit <id>` opens one job, and `rne edit --batch N` opens every non-running job of batch N. The screen shows:
+  - **Naming:** show/movie name, season, and the episode (or the *first* episode for a batch, renumbering the jobs in their current episode order), with a live list of the resulting output paths. Output paths stay under the same root. The show/movie folder is renamed only if it was named after the title (`naming.renamed_output`).
+  - **Settings** (`tui/settings.py`, also used by ingest/queue in phase 1b), built from the source's real tracks via the probe snapshot. Audio rows have a keep checkbox, codec and bitrate pickers (recommended bitrate marked), and ▲▼ reordering; the first kept track plays by default. Subtitle rows have keep and default checkboxes, at most one default, with the frame count and a "likely forced" hint. Below them are quality/preset/tune pickers with the defaults marked, and detelecine/decomb checkboxes with the reason they're recommended.
+  - **Batch edits:** settings apply to every job in the batch. Each job keeps its own chapter range, encoder and `extra_args` (`jobs.plan_edits`).
+  - **Errors:** shown live (tracks missing from the source, duplicate outputs, empty name); Save stays disabled until they're fixed.
+  - **Saving:** `jobs.apply_edits` saves each job atomically unless it became `running` meanwhile; any job that couldn't be saved gives a non-zero exit.
+  - **Unreadable source:** if the source can't be probed (moved or deleted), only naming can be edited.
+- **`rne edit <id> --raw`** — the pre-v0.6 editor: opens that job's `handbrake_args` JSON in `$EDITOR`. On save, validates and writes back. **Refuses to edit a `running` job** with a non-zero exit. Editing other states (queued, paused, failed, interrupted, cancelled, done) is allowed. Validation criteria (all must pass; on failure the user is offered a chance to re-open the editor):
   1. **JSON parses** — the file content is valid JSON.
   2. **Conforms to `HandbrakeArgs` schema** — the top-level object contains only the known fields (`encoder`, `quality`, `preset`, `audio_tracks`, `subtitle_tracks`, `detelecine`, `decomb`, `tune`, `extra_args`); unknown keys are rejected.
   3. **`AudioTrack` invariant** — for each entry in `audio_tracks`: `bitrate` is required (positive integer) when `codec != "copy"`, and must be absent when `codec == "copy"`.

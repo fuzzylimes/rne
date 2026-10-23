@@ -14,8 +14,8 @@ Personal media pipeline: disc → rip (MakeMKV) → encode (HandBrake) → queue
 ## Project conventions
 
 - Python 3.12+, `uv` for dependency management.
-- Standard library by default. Only runtime dep is `flask`. Don't add
-  dependencies without asking.
+- Standard library by default. Runtime deps are `flask` (dashboard) and
+  `textual` (terminal UI, approved for v0.6). Don't add others without asking.
 - No ORM. SQLite via stdlib `sqlite3` with `Row` factory.
 - `db.py` owns all schema and common queries. Inline one-off queries are fine
   at call sites.

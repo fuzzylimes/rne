@@ -11,6 +11,43 @@ from rne.models import HandbrakeArgs, JobStatus
 
 
 def run(args) -> None:
+    if getattr(args, "raw", False):
+        if args.id is None:
+            print("--raw needs a job ID.", file=sys.stderr)
+            sys.exit(2)
+        run_raw(args)
+    else:
+        run_tui(args)
+
+
+def run_tui(args) -> None:
+    """Full-screen editor: one job, a whole batch, or a picker when neither is given."""
+    from rne.tui.edit import EditApp
+
+    conn = db.connect()
+    db.init_db(conn)
+    if args.batch is not None:
+        job_ids = jobs.batch_job_ids(conn, args.batch)
+        if not job_ids:
+            print(f"Batch {args.batch} has no editable jobs.", file=sys.stderr)
+            sys.exit(1)
+    elif args.id is not None:
+        if conn.execute("SELECT 1 FROM jobs WHERE id = ?", (args.id,)).fetchone() is None:
+            print(f"Job {args.id} not found.", file=sys.stderr)
+            sys.exit(1)
+        job_ids = [args.id]
+    else:
+        job_ids = None
+    # None when the user quits from the picker.
+    lines, ok = EditApp(conn, job_ids).run() or ([], True)
+    for line in lines:
+        print(line)
+    if not ok:
+        sys.exit(1)
+
+
+def run_raw(args) -> None:
+    """Edit handbrake_args JSON in $EDITOR (the pre-v0.6 behaviour)."""
     conn = db.connect()
     db.init_db(conn)
     row = conn.execute("SELECT * FROM jobs WHERE id = ?", (args.id,)).fetchone()

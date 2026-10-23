@@ -767,7 +767,7 @@ def test_edit_toctou_job_running_refused(tmp_path):
     with patch("rne.cli.edit.db.connect", side_effect=lambda *_: real_connect(db_path)):
         with patch("rne.cli.edit.subprocess.run", side_effect=fake_editor):
             with pytest.raises(SystemExit) as exc_info:
-                edit_mod.run(args)
+                edit_mod.run_raw(args)
 
     assert exc_info.value.code == 1
 
