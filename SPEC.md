@@ -240,6 +240,10 @@ CREATE TABLE jobs (
     -- Grouping
     ingest_batch_id   INTEGER REFERENCES ingest_batches(id),
 
+    -- Added by migration 1 (v0.6). JSON snapshot of the source's probe
+    -- (StreamSummary + optional chapters); NULL for jobs queued earlier.
+    source_probe      TEXT,
+
     CHECK ((show IS NOT NULL AND movie IS NULL) OR (show IS NULL AND movie IS NOT NULL))
 );
 
@@ -277,6 +281,30 @@ CREATE TABLE queue_settings (
 );
 INSERT INTO queue_settings (id) VALUES (1);
 ```
+
+### Schema migrations
+
+`SCHEMA_SQL` is the v0.5 baseline and is never edited. Later changes are steps in
+`db.MIGRATIONS`, applied in order by `db.migrate()` (called from `init_db()`), with
+`PRAGMA user_version` recording how many have run. Steps are append-only. The
+worker, dashboard and CLI may all start at once, so `migrate()` re-reads the
+version under `BEGIN IMMEDIATE` and a failed step rolls back whole. The worker,
+the dashboard (at startup), `rne ingest`, `rne queue` and `rne edit` all call
+`init_db()`.
+
+| Version | Release | Change |
+|---|---|---|
+| 1 | v0.6 | `jobs.source_probe` |
+
+### Source probe snapshot
+
+`jobs.source_probe` stores the source's track layout as JSON
+(`probe.snapshot_to_json`), with a `version` key, the `video`/`audio`/`subtitle`
+stream lists, and a `chapters` list for disc-split jobs. Ingest and queue save it
+from the probes they already run (the first file's probe, plus the per-file
+probes from mismatch detection), so editors can list a job's real tracks
+without re-running ffprobe. `jobs.load_source_summary()` re-probes when the
+snapshot is missing (jobs from before v0.6) or unreadable, and saves the result.
 
 ### handbrake_args JSON shape
 
@@ -414,6 +442,9 @@ rne/
     ├── config.py            # paths, env defaults, codec policy
     ├── db.py                # connect(), pragmas, schema init, common queries
     ├── models.py            # Job, AudioTrack, HandbrakeArgs, JobStatus
+    ├── plan.py              # encode rules shared by every front end (pure)
+    ├── naming.py            # output file/folder names (pure)
+    ├── jobs.py              # batch/job inserts, safe edits, source snapshots
     ├── handbrake.py         # args JSON → command list (pure function)
     ├── probe.py             # ffprobe wrapper, stream summary
     ├── makemkv.py           # makemkvcon wrapper
@@ -451,10 +482,13 @@ rne/
 ### Module ownership
 
 - **`config.py`** — flat module of constants. Things like `DB_PATH`, `STAGING_ROOT`, `MEDIA_ROOT`, default minlength, default ffprobe timeout, the flatpak HandBrake invocation prefix, `COPY_FRIENDLY_AUDIO_CODECS`, `AC3_BITRATE_BY_CHANNELS`, `DEFAULT_PRESET` / `DEFAULT_PRESET_DVD`, `RIP_RETRIES` (env `RNE_RIP_RETRIES`). Override via env vars where appropriate. Not pydantic. When the project grows past 10 settings, revisit. The exceptions to "flat constants" are the two things that come from the optional TOML file. First, output-disk resolution (see "Output disks"): `load_disk_config()` parses it into a `DiskConfig`, and `resolve_roots(disk=..., media_root=...)` returns a frozen `Roots(media_root, staging_root)` for one invocation. Both raise `ConfigError` on a malformed file or unknown disk name. `Roots` is threaded into `ingest.run()` / `queue.run()` as a parameter — no mutable module-level state. Second, notifications (see "Rip-complete notifications"): `load_notify_config()` parses `[notifications.mqtt]` into a `NotifyConfig(mqtt, skipped)`, where `mqtt` is a frozen `MqttConfig` or None and `skipped` explains a partially-filled table. It is a separate loader rather than a field on `DiskConfig` because `--media-root` short-circuits disk resolution without reading the file at all, and notifications must still be honoured on that path.
-- **`db.py`** — owns everything sqlite. Schema as a `SCHEMA_SQL` constant, `init_db()` that runs it idempotently, `connect()` that applies pragmas. Thin functions like `claim_next_job()`, `update_progress(...)`, `mark_done(...)`. No ORM. `sqlite3.Row` row factory. One-off queries can stay inline at the call site.
+- **`db.py`** — owns everything sqlite. Schema as a `SCHEMA_SQL` constant plus append-only `MIGRATIONS` (see "Schema migrations"), `init_db()` that runs both idempotently, `connect()` that applies pragmas. Thin functions like `claim_next_job()`, `update_progress(...)`, `mark_done(...)`. No ORM. `sqlite3.Row` row factory. One-off queries can stay inline at the call site.
 - **`models.py`** — dataclasses mirroring the columns, with `from_row(row)` classmethods. `JobStatus` is a `StrEnum`. `HandbrakeArgs` and the nested `AudioTrack` dataclass with `to_json()` / `from_json()`.
 - **`handbrake.py`** — pure. Takes a `HandbrakeArgs` and source path, returns `["HandBrakeCLI", "-i", ...]`. No subprocess, no DB, no I/O. The flatpak prefix from `config.py` is prepended here. Validates `AudioTrack` entries: bitrate required when codec != "copy", rejected when codec == "copy". `source_path` may point outside `/mnt/media/staging/` for jobs created via `rne queue` — this is valid and expected.
-- **`cli/_pipeline.py`** — shared interactive pipeline helpers used by both `ingest.py` and `queue.py`: probe-table display, `build_preview`, mismatch detection, `prompt_metadata`, `prompt_encoding_config`, `preview_and_confirm`, `create_batch_row`, `insert_jobs`, the `$EDITOR` round-trip, and the disc-split interactive flow (`prompt_disc_split`, `_disc_split_confirm_loop`, `_build_disc_split_jobs`).
+- **`plan.py`** — pure encode rules, the single source of truth for "what are the choices" and "what is the default" for a given `StreamSummary`: DVD/NTSC/interlace detection, default preset, when detelecine/decomb are offered and their defaults (`Toggle`), copy-vs-AC3 audio recommendation, `default_args()` (exactly what pressing Enter at every prompt produces), picker labels and option lists, `validate()` against the source's real tracks, and the `tv_job()`/`movie_job()` job-plan entry builders. The CLI prompts, and later the TUI, dashboard form and API, all call it.
+- **`naming.py`** — pure output-path templates (see "Storage layout").
+- **`jobs.py`** — operations front ends perform on jobs: `create_batch_row`, `insert_jobs` (also stores the probe snapshot), `update_job_args` (one atomic `UPDATE ... WHERE status != 'running'`, raising `JobRunning` / `JobNotFound`), and `load_source_summary`.
+- **`cli/_pipeline.py`** — shared interactive pipeline helpers used by both `ingest.py` and `queue.py`: probe-table display, `build_preview`, mismatch detection, `prompt_metadata`, `prompt_encoding_config`, `preview_and_confirm`, the `$EDITOR` round-trip (probe objects are kept out of the JSON and re-attached by `source_path`), and the disc-split interactive flow (`prompt_disc_split`, `_disc_split_confirm_loop`, `_build_disc_split_jobs`).
 - **`cli/disc_split.py`** — pure algorithmic module (no I/O) for multi-episode disc splitting: `Episode` dataclass, `autodetect` (greedy ±35% duration grouping), `groups_to_episodes`, `fixed_split`, `manual_entry`.
 - **`probe.py`** — port of `mkvprobe-format.py`. `summarize(mkv_path) → StreamSummary`. The `AudioStream` summary includes `codec`, `channels`, `bitrate`, `language`, `title`, `default`, `forced`. Also provides `Chapter` dataclass and `probe_chapters(mkv_path)` for multi-episode disc mode. The table-printing logic moves into `cli/ingest.py`.
 - **`notify.py`** — a hand-rolled MQTT 3.1.1 publisher: connect, publish one message, disconnect. No dependency, because that is the entire protocol surface needed — no subscribe, no reconnect, no session state, no MQTT 5 — and `paho-mqtt` would be the second runtime dep for ~40 lines saved. Packet construction (`connect_packet`, `publish_packet`, `encode_remaining_length`, `render`) is pure and unit-tested; `publish()` does the socket work and raises `NotifyError`; `send()` wraps both, catches everything, and returns a `Result(ok, detail)` for the caller to print. QoS 0 and 1 only — QoS 2's four-packet handshake buys nothing for a notification, and the config layer rejects `qos = 2` rather than silently downgrading. Verified byte-for-byte against `paho-mqtt` over a real socket for the anonymous-QoS-0 and authenticated-QoS-1-with-retain cases.
@@ -801,7 +835,7 @@ CLI exits. The worker (running independently under systemd) claims the first job
   1. **JSON parses** — the file content is valid JSON.
   2. **Conforms to `HandbrakeArgs` schema** — the top-level object contains only the known fields (`encoder`, `quality`, `preset`, `audio_tracks`, `subtitle_tracks`, `detelecine`, `decomb`, `tune`, `extra_args`); unknown keys are rejected.
   3. **`AudioTrack` invariant** — for each entry in `audio_tracks`: `bitrate` is required (positive integer) when `codec != "copy"`, and must be absent when `codec == "copy"`.
-  4. **TOCTOU re-check** — after the editor closes and validation passes, re-query the job's status. If it has transitioned to `running` while the editor was open, refuse the save with the message `"job is now running; cannot edit"` and exit non-zero. This guards against the race where the worker claims a queued job while the user is editing it.
+  4. **TOCTOU re-check** — after the editor closes and validation passes, the save goes through `jobs.update_job_args`, which writes only if the job is not `running`, in a single statement. If the job moved to `running` while the editor was open, the save is refused with the message `"job is now running; cannot edit"` and a non-zero exit. This guards against the race where the worker claims a queued job while the user is editing it.
 - **`rne cancel <id>`** — terminal removal of a queued job. Sets status to `cancelled`. CLI only — not exposed in the dashboard.
 - **`rne retry <id>`** — resets any terminal-state job back to `queued`. Bumps `attempt_count`, clears progress and error fields.
 - **`rne pause`** / **`rne resume`** — toggle the global `queue_settings.paused` flag. The worker checks this between jobs.

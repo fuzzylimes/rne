@@ -3,10 +3,8 @@ from __future__ import annotations
 import pathlib
 import sys
 
-from rne import config, db
+from rne import config, db, plan
 from rne.cli._pipeline import (
-    create_batch_row,
-    insert_jobs,
     mungefilename,
     preview_and_confirm,
     probe_and_display,
@@ -14,6 +12,7 @@ from rne.cli._pipeline import (
     prompt_encoding_config,
     prompt_metadata,
 )
+from rne.jobs import create_batch_row, insert_jobs
 from rne.models import HandbrakeArgs
 
 
@@ -39,37 +38,25 @@ def _build_jobs_plan_queue(
     """
     jobs = []
     for pos, file_path in enumerate(source_paths):
-        source = str(file_path)
-
         if is_tv:
-            ep = episodes[pos]  # type: ignore[index]
-            out_dir = staging_dir / f"Season {season:02d}"
-            out_name = f"{show} - S{season:02d}E{ep:02d}.mkv"
-            out_path = str(out_dir / out_name)
-            label = f"S{season:02d}E{ep:02d}"
-            episode_out: int | None = ep
+            jobs.append(plan.tv_job(
+                show=show,  # type: ignore[arg-type]
+                season=season,  # type: ignore[arg-type]
+                episode=episodes[pos],  # type: ignore[index]
+                show_dir=staging_dir,
+                source_path=file_path,
+                args=hb_args,
+            ))
         else:
-            if len(source_paths) == 1:
-                out_name = f"{movie}.mkv"
-            else:
-                out_name = f"{movie}_{pos:02d}.mkv"
-            out_path = str(staging_dir / out_name)
-            label = movie  # type: ignore[assignment]
-            episode_out = None
-
-        jobs.append(
-            {
-                "label": label,
-                "show": show,
-                "season": season,
-                "episode": episode_out,
-                "movie": movie,
-                "source_path": source,
-                "output_path": out_path,
-                "handbrake_args": hb_args,
-                "layout_warning": False,
-            }
-        )
+            # Several files under one movie name are told apart by position.
+            suffix = "" if len(source_paths) == 1 else f"_{pos:02d}"
+            jobs.append(plan.movie_job(
+                movie=movie,  # type: ignore[arg-type]
+                movie_dir=staging_dir,
+                source_path=file_path,
+                args=hb_args,
+                suffix=suffix,
+            ))
     return jobs
 
 

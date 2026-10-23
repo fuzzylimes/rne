@@ -10,11 +10,15 @@ import subprocess
 import sys
 import tempfile
 
-from rne import config, probe
+from rne import config, plan, probe
 from rne.cli import prompts
 from rne.cli.disc_split import Episode, autodetect, fixed_split, groups_to_episodes, manual_entry
 from rne.makemkv import parse_index_spec
 from rne.models import AudioTrack, HandbrakeArgs, SubtitleTrack
+
+# Plan keys that hold probe objects, not settings: kept out of the $EDITOR
+# round-trip and re-attached afterwards by source_path.
+_SOURCE_KEYS = ("source_summary", "source_chapters")
 
 # Characters stripped from user-supplied path components, mirroring .abcde.conf:
 #   sed 's/[:><|*/\"'\''?[:cntrl:]]//g'
@@ -417,9 +421,7 @@ def prompt_encoding_config(
                 print("Please enter a number.", file=sys.stderr)
 
     # d. CRF, preset, animation tune, decomb
-    is_dvd_source = is_dvd or (
-        bool(stream_summary.video) and stream_summary.video[0].codec == "mpeg2video"
-    )
+    dvd_source = plan.is_dvd_source(stream_summary, is_dvd)
 
     crf_str = prompts.prompt_with_default(
         "Quality (CRF)", str(config.DEFAULT_QUALITY))
@@ -432,44 +434,25 @@ def prompt_encoding_config(
         )
         crf = config.DEFAULT_QUALITY
 
-    # DVDs default to a faster preset; Blu-rays keep the slower default.
-    default_preset = (
-        config.DEFAULT_PRESET_DVD if is_dvd_source else config.DEFAULT_PRESET
-    )
-    preset = prompts.prompt_with_default("Preset", default_preset)
+    preset = prompts.prompt_with_default("Preset", plan.default_preset(dvd_source))
 
     tune: str | None = config.DEFAULT_TUNE
     if prompts.prompt_yes_no("Animation source?", default=False):
         tune = "animation"
 
     detelecine = False
-    if is_dvd_source and stream_summary.video:
-        try:
-            fps_val = float(stream_summary.video[0].fps)
-        except (ValueError, TypeError):
-            fps_val = 0.0
-        if 28.0 <= fps_val <= 31.0:
-            detelecine = prompts.prompt_yes_no(
-                "Detelecine? Source is NTSC DVD.", default=True
-            )
+    detelecine_opt = plan.detelecine_option(stream_summary, dvd_source)
+    if detelecine_opt:
+        detelecine = prompts.prompt_yes_no(
+            f"Detelecine? {detelecine_opt.reason}", default=detelecine_opt.default
+        )
 
     decomb = False
-    if is_dvd_source:
-        decomb = prompts.prompt_yes_no("Decomb? Source is DVD.", default=True)
-    else:
-        interlaced = any(
-            v.field_order not in ("progressive", "", "unknown")
-            for v in stream_summary.video
+    decomb_opt = plan.decomb_option(stream_summary, dvd_source)
+    if decomb_opt:
+        decomb = prompts.prompt_yes_no(
+            f"Decomb? {decomb_opt.reason}", default=decomb_opt.default
         )
-        if interlaced:
-            field_label = (
-                stream_summary.video[0].field_order
-                if stream_summary.video
-                else "interlaced"
-            )
-            decomb = prompts.prompt_yes_no(
-                f"Decomb? Source is {field_label}.", default=False
-            )
 
     return HandbrakeArgs(
         encoder=config.DEFAULT_ENCODER,
@@ -492,10 +475,21 @@ def _plan_to_json(jobs_plan: list[dict]) -> str:
     serialisable = []
     for job in jobs_plan:
         hb: HandbrakeArgs = job["handbrake_args"]
-        d = dict(job)
+        d = {k: v for k, v in job.items() if k not in _SOURCE_KEYS}
         d["handbrake_args"] = json.loads(hb.to_json())
         serialisable.append(d)
     return json.dumps(serialisable, indent=2)
+
+
+def _reattach_sources(edited: list[dict], original: list[dict]) -> list[dict]:
+    """Copy probe data from the original plan onto edited jobs, by source_path."""
+    by_source = {
+        job["source_path"]: {k: job[k] for k in _SOURCE_KEYS if k in job}
+        for job in original
+    }
+    for job in edited:
+        job.update(by_source.get(job.get("source_path"), {}))
+    return edited
 
 
 def _plan_from_json(text: str) -> list[dict]:
@@ -529,7 +523,7 @@ def edit_plan(jobs_plan: list[dict]) -> list[dict]:
             subprocess.run([editor, tmp], check=False)
             try:
                 with open(tmp) as f:
-                    return _plan_from_json(f.read())
+                    return _reattach_sources(_plan_from_json(f.read()), jobs_plan)
             except Exception as exc:
                 print(f"Validation error: {exc}", file=sys.stderr)
                 raw = input("Re-open editor? [Y/n]: ").strip().lower()
@@ -555,13 +549,21 @@ def preview_and_confirm(
     remaining_file_paths corresponds to jobs_plan[1:] — the files whose
     layout should be compared against ref_summary (the first file's probe).
 
-    Returns the final (possibly filtered) jobs_plan.
-    Calls sys.exit on abort.
+    Returns the final (possibly filtered) jobs_plan, each entry carrying its
+    source_summary when the probe succeeded. Calls sys.exit on abort.
     """
+    # Every job reading the reference file (all of them in disc-split mode)
+    # shares its summary; the rest get the summary probed below.
+    ref_source = jobs_plan[0]["source_path"] if jobs_plan else None
+    for job in jobs_plan:
+        if job["source_path"] == ref_source:
+            job["source_summary"] = ref_summary
+
     mismatch_details: list[str] = []
     for pos, file_path in enumerate(remaining_file_paths, 1):
         try:
             other_summary = probe.summarize(probe.probe(str(file_path)))
+            jobs_plan[pos]["source_summary"] = other_summary
             if not probe.layouts_match(ref_summary, other_summary):
                 jobs_plan[pos]["layout_warning"] = True
                 mismatch_details.append(
@@ -613,59 +615,6 @@ def preview_and_confirm(
             jobs_plan = edit_plan(jobs_plan)
 
     return jobs_plan
-
-
-# ---------------------------------------------------------------------------
-# DB helpers
-# ---------------------------------------------------------------------------
-
-
-def create_batch_row(
-    conn,
-    *,
-    is_tv: bool,
-    show: str | None,
-    movie: str | None,
-    season: int | None,
-    notes: str,
-    label_suffix: str = "",
-) -> int:
-    """Insert an ingest_batches row and return its id."""
-    base_label = f"{show} S{season:02d}" if is_tv else str(movie)
-    label = base_label + label_suffix
-    cur = conn.execute(
-        "INSERT INTO ingest_batches (label, show, movie, notes) VALUES (?, ?, ?, ?)",
-        (label, show, movie, notes),
-    )
-    conn.commit()
-    return cur.lastrowid
-
-
-def insert_jobs(conn, batch_id: int, jobs_plan: list[dict]) -> None:
-    """Insert job rows for an already-created ingest batch."""
-    for job in jobs_plan:
-        hb: HandbrakeArgs = job["handbrake_args"]
-        pathlib.Path(job["output_path"]).parent.mkdir(
-            parents=True, exist_ok=True)
-        conn.execute(
-            """
-            INSERT INTO jobs
-              (show, season, episode, movie, source_path, output_path,
-               handbrake_args, ingest_batch_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                job["show"],
-                job["season"],
-                job["episode"],
-                job["movie"],
-                job["source_path"],
-                job["output_path"],
-                hb.to_json(),
-                batch_id,
-            ),
-        )
-    conn.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -791,7 +740,10 @@ def prompt_disc_split(
     target_sec = ep_min * 60
     episodes = groups_to_episodes(autodetect(chapters, target_sec), start_ep)
     episodes = _disc_split_confirm_loop(chapters, episodes, start_ep)
-    return _build_disc_split_jobs(episodes, source_path, show, season, staging_dir, hb_args)
+    jobs_plan = _build_disc_split_jobs(episodes, source_path, show, season, staging_dir, hb_args)
+    for job in jobs_plan:
+        job["source_chapters"] = chapters
+    return jobs_plan
 
 
 def _build_disc_split_jobs(
@@ -803,34 +755,14 @@ def _build_disc_split_jobs(
     hb_args: HandbrakeArgs,
 ) -> list[dict]:
     """Build a job plan list from an accepted episode split. Pure — no I/O."""
-    jobs: list[dict] = []
-    for ep in episodes:
-        out_dir = staging_dir / f"Season {season:02d}"
-        out_name = f"{show} - S{season:02d}E{ep.number:02d}.mkv"
-        ep_hb_args = HandbrakeArgs(
-            encoder=hb_args.encoder,
-            quality=hb_args.quality,
-            preset=hb_args.preset,
-            audio_tracks=hb_args.audio_tracks,
-            subtitle_tracks=hb_args.subtitle_tracks,
-            detelecine=hb_args.detelecine,
-            decomb=hb_args.decomb,
-            tune=hb_args.tune,
-            extra_args=hb_args.extra_args,
-            chapter_start=ep.chapter_start,
-            chapter_end=ep.chapter_end,
+    return [
+        plan.tv_job(
+            show=show,
+            season=season,
+            episode=ep.number,
+            show_dir=staging_dir,
+            source_path=source_path,
+            args=plan.with_chapters(hb_args, ep.chapter_start, ep.chapter_end),
         )
-        jobs.append(
-            {
-                "label": f"S{season:02d}E{ep.number:02d}",
-                "show": show,
-                "season": season,
-                "episode": ep.number,
-                "movie": None,
-                "source_path": str(source_path),
-                "output_path": str(out_dir / out_name),
-                "handbrake_args": ep_hb_args,
-                "layout_warning": False,
-            }
-        )
-    return jobs
+        for ep in episodes
+    ]

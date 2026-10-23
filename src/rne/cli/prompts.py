@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sys
 
-from rne import config
+from rne import plan
 from rne.makemkv import parse_index_spec
 from rne.models import AudioTrack
 from rne.probe import AudioStream
@@ -69,11 +69,11 @@ def prompt_audio_track_decision(stream: AudioStream, track_num: int) -> AudioTra
     Returns immediately (no prompt) for copy-friendly codecs.
     Prompts for Y/n/c otherwise, with AC3 transcode as the recommended default.
     """
-    if stream.codec.lower() in config.COPY_FRIENDLY_AUDIO_CODECS:
-        return AudioTrack(track=track_num, codec="copy")
+    if plan.is_copy_friendly(stream):
+        return plan.recommended_audio(stream, track_num)
 
     channels = stream.channels if stream.channels is not None else 2
-    recommended_bitrate = config.AC3_BITRATE_BY_CHANNELS.get(channels, 640)
+    recommended_bitrate = plan.recommended_ac3_bitrate(stream)
     ch_str = f"{channels}ch"
 
     print(f"Track {track_num} is {stream.codec} {ch_str}. Transcode? [Y/n/c]")
@@ -84,7 +84,7 @@ def prompt_audio_track_decision(stream: AudioStream, track_num: int) -> AudioTra
     while True:
         raw = input("> ").strip().lower()
         if not raw or raw == "y":
-            return AudioTrack(track=track_num, codec="ac3", bitrate=recommended_bitrate)
+            return plan.recommended_audio(stream, track_num)
         if raw == "n":
             return AudioTrack(track=track_num, codec="copy")
         if raw == "c":

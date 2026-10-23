@@ -8,6 +8,14 @@ from rne import config, db
 def create_app() -> Flask:
     app = Flask(__name__)
 
+    # Bring the schema up to date before serving, in case the dashboard
+    # starts before the worker after an upgrade.
+    conn = db.connect()
+    try:
+        db.init_db(conn)
+    finally:
+        conn.close()
+
     @app.before_request
     def open_db() -> None:
         g.conn = db.connect()

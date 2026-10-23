@@ -89,8 +89,44 @@ def connect(db_path: str | None = None) -> sqlite3.Connection:
     return conn
 
 
+# Schema upgrades, applied in order on top of SCHEMA_SQL. Entry N moves the
+# database from PRAGMA user_version N to N+1. Append only: never edit or reorder
+# a step that has shipped, since existing databases have already run it.
+MIGRATIONS: list[tuple[str, ...]] = [
+    # 1 (v0.6): probe snapshot of the source, so editors can list its real
+    # tracks without re-running ffprobe. NULL for jobs queued before v0.6.
+    ("ALTER TABLE jobs ADD COLUMN source_probe TEXT",),
+]
+
+
+def schema_version(conn: sqlite3.Connection) -> int:
+    return conn.execute("PRAGMA user_version").fetchone()[0]
+
+
+def migrate(conn: sqlite3.Connection) -> None:
+    """Bring the schema up to len(MIGRATIONS). Safe to call from every process.
+
+    The worker, dashboard and CLI can all start at once, so the version is
+    re-read under a write lock: whoever gets the lock second finds nothing to do.
+    """
+    target = len(MIGRATIONS)
+    if schema_version(conn) >= target:
+        return
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        for step in MIGRATIONS[schema_version(conn):]:
+            for statement in step:
+                conn.execute(statement)
+        conn.execute(f"PRAGMA user_version = {target}")
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+
+
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA_SQL)
+    migrate(conn)
 
 
 # ---------------------------------------------------------------------------

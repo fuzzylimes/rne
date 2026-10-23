@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import subprocess
 from dataclasses import dataclass
@@ -74,6 +75,43 @@ def layouts_match(a: StreamSummary, b: StreamSummary) -> bool:
         if a_track.codec != b_track.codec:
             return False
     return True
+
+
+# ---------------------------------------------------------------------------
+# Snapshot: a StreamSummary (and optional chapters) stored as JSON on the job,
+# so editors can list the source's real tracks without re-running ffprobe.
+# ---------------------------------------------------------------------------
+
+SNAPSHOT_VERSION = 1
+
+
+def snapshot_to_json(summary: StreamSummary, chapters: list[Chapter] | None = None) -> str:
+    data: dict = {"version": SNAPSHOT_VERSION, **dataclasses.asdict(summary)}
+    if chapters is not None:
+        data["chapters"] = [dataclasses.asdict(c) for c in chapters]
+    return json.dumps(data)
+
+
+def snapshot_from_json(text: str) -> tuple[StreamSummary, list[Chapter] | None]:
+    """Inverse of snapshot_to_json. Raises ValueError on anything unexpected.
+
+    Callers treat a ValueError as "no usable snapshot" and re-probe the file.
+    """
+    try:
+        data = json.loads(text)
+        if data.get("version") != SNAPSHOT_VERSION:
+            raise ValueError(f"unsupported snapshot version {data.get('version')!r}")
+        summary = StreamSummary(
+            video=[VideoStream(**v) for v in data["video"]],
+            audio=[AudioStream(**a) for a in data["audio"]],
+            subtitle=[SubtitleStream(**s) for s in data["subtitle"]],
+        )
+        chapters = (
+            [Chapter(**c) for c in data["chapters"]] if "chapters" in data else None
+        )
+    except (TypeError, KeyError, AttributeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"bad probe snapshot: {exc}") from exc
+    return summary, chapters
 
 
 def probe_chapters(mkv_path: str) -> list[Chapter]:

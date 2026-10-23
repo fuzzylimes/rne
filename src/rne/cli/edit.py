@@ -6,12 +6,13 @@ import subprocess
 import sys
 import tempfile
 
-from rne import db
+from rne import db, jobs
 from rne.models import HandbrakeArgs, JobStatus
 
 
 def run(args) -> None:
     conn = db.connect()
+    db.init_db(conn)
     row = conn.execute("SELECT * FROM jobs WHERE id = ?", (args.id,)).fetchone()
     if row is None:
         print(f"Job {args.id} not found.", file=sys.stderr)
@@ -46,20 +47,15 @@ def run(args) -> None:
                     print("Edit cancelled.", file=sys.stderr)
                     sys.exit(1)
                 continue
-
-            recheck = conn.execute(
-                "SELECT status FROM jobs WHERE id = ?", (args.id,)
-            ).fetchone()
-            if recheck["status"] == JobStatus.RUNNING:
-                print("job is now running; cannot edit", file=sys.stderr)
-                sys.exit(1)
             break
 
-        conn.execute(
-            "UPDATE jobs SET handbrake_args = ? WHERE id = ?",
-            (new_args.to_json(), args.id),
-        )
-        conn.commit()
+        # The worker may have claimed the job while the editor was open;
+        # update_job_args refuses atomically in that case.
+        try:
+            jobs.update_job_args(conn, args.id, new_args)
+        except jobs.JobRunning:
+            print("job is now running; cannot edit", file=sys.stderr)
+            sys.exit(1)
         print(f"Job {args.id} updated.")
     finally:
         try:

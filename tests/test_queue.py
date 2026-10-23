@@ -220,7 +220,7 @@ def test_queue_jobs_plan_multi_episode_order(tmp_path):
 
 
 def test_queue_batch_row_notes_contains_source_path(conn, tmp_path):
-    from rne.cli._pipeline import create_batch_row
+    from rne.jobs import create_batch_row
 
     notes = f"Queued from {tmp_path.absolute()}"
     batch_id = create_batch_row(
@@ -239,7 +239,7 @@ def test_queue_batch_row_notes_contains_source_path(conn, tmp_path):
 
 
 def test_queue_batch_row_label_has_queued_suffix(conn, tmp_path):
-    from rne.cli._pipeline import create_batch_row
+    from rne.jobs import create_batch_row
 
     batch_id = create_batch_row(
         conn,
@@ -258,7 +258,7 @@ def test_queue_batch_row_label_has_queued_suffix(conn, tmp_path):
 
 def test_queue_batch_row_no_raw_dir_created(conn, tmp_path):
     """create_batch_row for queue mode must not touch the filesystem."""
-    from rne.cli._pipeline import create_batch_row
+    from rne.jobs import create_batch_row
 
     create_batch_row(
         conn,
@@ -279,7 +279,7 @@ def test_queue_batch_row_no_raw_dir_created(conn, tmp_path):
 
 
 def test_insert_jobs_source_path_preserved(conn, tmp_path):
-    from rne.cli._pipeline import create_batch_row, insert_jobs
+    from rne.jobs import create_batch_row, insert_jobs
 
     src = tmp_path / "original.mkv"
     src.touch()
@@ -319,7 +319,7 @@ def test_insert_jobs_source_path_preserved(conn, tmp_path):
 
 def test_insert_jobs_source_path_outside_staging(conn, tmp_path):
     """source_path may point anywhere — not just under the staging root."""
-    from rne.cli._pipeline import create_batch_row, insert_jobs
+    from rne.jobs import create_batch_row, insert_jobs
 
     external_src = tmp_path / "external" / "old-rip.mkv"
     external_src.parent.mkdir()
