@@ -374,6 +374,61 @@ Both sets live in `config.py` as tunable constants. To treat DTS as copy-friendl
 
 The prompt itself only appears when the source codec is *not* in `COPY_FRIENDLY_AUDIO_CODECS`. For DVDs (where AC3 is universal), the user never sees the prompt. For Blu-rays with a TrueHD or DTS-HD track, the prompt appears once per non-friendly track.
 
+## Full-screen ingest and queue (v0.6)
+
+`rne ingest` and `rne queue` open a Textual app (`tui/pipeline.py`); `--plain`
+runs the line-by-line prompts described in the two flow sections below, which
+remain the reference for every rule (defaults, numbering, naming). The app
+asks the same questions in the same order, and the answers produce the same jobs:
+
+    ingest:  Titles → Naming → Rip → Tracks → [Chapters] → Review
+    queue:            Naming →       Tracks → [Chapters] → Review
+
+- **State.** Every step reads and writes one `tui.flow.Draft`, so stepping back
+  keeps what was entered. The job plan is built from it by `Draft.build_plan()`
+  with the same `plan.tv_job` / `plan.movie_job` entries, movie suffixes
+  (`_tNN` ingest, `_NN` queue) and disc-split builder as the prompts. A title
+  skipped after a failed rip leaves a gap in the episode numbers, as before.
+- **Titles.** The `.mpls`-sorted table with a ✓ column. Space toggles, `a`
+  toggles all. The selection is kept in display order, which is the rip and
+  episode order.
+- **Naming.** TV/Movie, name (default: `-n` or the disc volume name; queue:
+  the file or folder name), season, first episode, and the multi-episode toggle
+  (TV, exactly one title/file), with a live preview of the episode labels and
+  the staging folder. `-n/-sn/-fe` pre-fill it. After the rip, the kind and the
+  multi-episode toggle are locked, but name/season/episode can still change:
+  outputs follow the new name, raws stay where they were ripped, and the batch
+  row's label/show/movie are updated when the jobs are queued.
+- **Rip.** Shows the titles to rip and an editable "Rip into" folder (replaces
+  the `Rip to …? [Y/n]` prompt). Start creates the batch row and
+  `_raw/batch-N/` (still `exist_ok=False`), then rips each title with
+  `makemkv.rip_title`. This is the same command as before plus `-r
+  --progress=-same`, parsed into progress/task/message events for a progress
+  bar and log. Automatic retries (`RIP_RETRIES`) are unchanged; after them a
+  modal offers retry/skip/abort. The MQTT notification fires at the same point,
+  and its one-line result shows in the log. Then every ripped file is probed
+  (the first must succeed, as before).
+- **Tracks.** The shared settings form (`tui/settings.py`) built from the first
+  file's probe, pre-filled with `plan.default_args`, i.e. exactly the
+  press-Enter-everywhere answers.
+- **Chapters.** The chapter table and the proposed episodes. Split by length
+  (default 24 min, `autodetect`), evenly by N chapters (`fixed_split`), or by
+  typed ranges such as `1-6, 7-12` (`disc_split.parse_ranges`, the pure form of
+  the old manual entry).
+- **Review.** One row per job: label, output name, audio/subtitle summaries,
+  encode settings, and notes (different tracks, own settings, skipped, error).
+  Mismatch descriptions are listed below. Every job is validated against its
+  *own* file (`plan.validate`), and errors block queueing. `o` gives one file its
+  own settings (starting from that file's defaults when the shared settings
+  don't fit it), `x` skips or includes a file, `m` skips every mismatched file
+  (the old `skip-mismatched`), and `n` goes back to Naming. Skipped files are
+  left untouched.
+- **Queue mode** creates its batch row when the jobs are queued rather than up
+  front, so quitting early leaves no empty batch.
+- **Quit** is ctrl+q (refused while a rip is running). It exits 0 and, after a
+  rip, prints where the raws are and the `rne queue` command to resume. Errors
+  (abort after a failed rip, unreadable first file) exit 1.
+
 ## Queue CLI flow (`rne queue`)
 
 `rne queue <path>` is a second ingestion path for files that were ripped outside of `rne ingest` — re-queuing after a failed earlier rip, manually-ripped sources, or anything that bypassed the disc-ingest flow.

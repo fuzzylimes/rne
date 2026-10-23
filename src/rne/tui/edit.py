@@ -13,22 +13,9 @@ from textual.widgets import Button, DataTable, Footer, Header, Input, Label, Sta
 
 from rne import jobs
 from rne.models import JobStatus
+from rne.tui.common import APP_CSS
 from rne.tui.settings import SettingsForm
 
-APP_CSS = """
-Screen { background: $surface; }
-.section { text-style: bold; margin-top: 1; color: $accent; }
-.hint { color: $text-muted; }
-.field { height: auto; }
-.field Label { width: 16; }
-.field Input { width: 50; }
-.field Input.number { width: 8; }
-#errors { color: $error; margin-top: 1; }
-#outputs { color: $text-muted; }
-#buttons { height: auto; margin-top: 1; }
-#buttons Button { margin-right: 2; }
-#body { padding: 0 2; }
-"""
 
 
 def _picker_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -49,6 +36,8 @@ def _picker_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 
 class PickerScreen(Screen):
     """Choose a job (Enter) or its whole batch (b) to edit."""
+
+    DEFAULT_CSS = "PickerScreen #jobs { max-height: 100%; }"
 
     BINDINGS = [
         Binding("enter", "edit_job", "Edit job", priority=True),

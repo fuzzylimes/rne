@@ -80,6 +80,33 @@ def fixed_split(chapters: list[Chapter], n: int, start_ep: int) -> list[Episode]
     return groups_to_episodes(groups, start_ep)
 
 
+def parse_ranges(text: str, chapters: list[Chapter], start_ep: int) -> list[Episode]:
+    """Pure: '1-5, 6-10, 11' → one episode per range. Raises ValueError.
+
+    A single number is a one-chapter episode. Ranges must be in order and
+    must not overlap; chapters left out are simply not encoded.
+    """
+    episodes: list[Episode] = []
+    last_end = 0
+    for part in re.split(r"[,\s]+", text.strip()):
+        if not part:
+            continue
+        m = re.fullmatch(r"(\d+)(?:-(\d+))?", part)
+        if not m:
+            raise ValueError(f"{part!r} is not a chapter or START-END range")
+        s = int(m.group(1))
+        e = int(m.group(2) or s)
+        if s < 1 or e > len(chapters) or s > e:
+            raise ValueError(f"{part}: chapters are 1-{len(chapters)}")
+        if s <= last_end:
+            raise ValueError(f"{part} overlaps or comes before the previous range")
+        episodes.append(Episode(start_ep + len(episodes), s, e, chapters[s - 1 : e]))
+        last_end = e
+    if not episodes:
+        raise ValueError("enter at least one range")
+    return episodes
+
+
 def manual_entry(chapters: list[Chapter], start_ep: int) -> list[Episode]:
     """Prompt the user to enter chapter ranges one episode at a time."""
     print(f"\n  Total chapters: {len(chapters)}")

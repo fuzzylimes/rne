@@ -106,6 +106,43 @@ def _resolve_manifest(path: pathlib.Path) -> list[pathlib.Path]:
 
 
 def run(args, roots: config.Roots) -> None:
+    if getattr(args, "plain", False):
+        run_plain(args, roots)
+    else:
+        run_tui(args, roots)
+
+
+def run_tui(args, roots: config.Roots) -> None:
+    """Full-screen queue: naming → tracks → review. Source files stay put."""
+    from rne import probe
+    from rne.cli.ingest import finish
+    from rne.tui import flow
+    from rne.tui.pipeline import PipelineApp
+
+    path = pathlib.Path(args.path).expanduser().resolve()
+    manifest = _resolve_manifest(path)
+    name_hint = mungefilename(path.name if path.is_dir() else path.stem)
+    conn = db.connect()
+    db.init_db(conn)
+    draft = flow.Draft(
+        mode="queue",
+        naming=flow.Naming(is_tv=True, title=name_hint),
+        staging_root=roots.staging_root,
+        is_dvd=args.dvd,
+        sources=[flow.Source(p) for p in manifest],
+    )
+    app = PipelineApp(
+        draft,
+        conn=conn,
+        prober=lambda p: probe.summarize(probe.probe(str(p))),
+        chapter_prober=lambda p: probe.probe_chapters(str(p)),
+        batch_notes=f"Queued from {path.absolute()}",
+    )
+    finish(app.run())
+
+
+def run_plain(args, roots: config.Roots) -> None:
+    """The pre-v0.6 line-by-line prompts (rne queue --plain)."""
     path = pathlib.Path(args.path).expanduser().resolve()
 
     # ---- Step 1: resolve path --------------------------------------------------

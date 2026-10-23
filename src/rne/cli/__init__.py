@@ -88,6 +88,10 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="N",
         help="First episode number (TV only; implies TV, skips the content-type prompt)",
     )
+    ingest_p.add_argument(
+        "--plain", action="store_true",
+        help="Use the old line-by-line prompts instead of the full-screen UI",
+    )
     _add_disk_flags(ingest_p)
 
     queue_p = sub.add_parser(
@@ -101,6 +105,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--dvd",
         action="store_true",
         help="Treat source as DVD (forces detelecine prompt for NTSC frame rates)",
+    )
+    queue_p.add_argument(
+        "--plain", action="store_true",
+        help="Use the old line-by-line prompts instead of the full-screen UI",
     )
     _add_disk_flags(queue_p)
 

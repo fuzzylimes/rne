@@ -32,7 +32,23 @@ Dashboard: `http://localhost:8500/`
 
 ### Ingest a disc
 
-Put a disc in the drive, then:
+Put a disc in the drive, then run `rne ingest`. It reads the disc, then opens a
+full-screen app that walks through **Titles → Naming → Rip → Tracks → Review**:
+
+- **Titles**: arrow keys move, space selects a title, `a` selects all, Enter continues.
+- **Naming**: TV or movie, name, season, first episode, with a live preview of the
+  episode numbers. Tick "one file holds several episodes" for chapter-split discs.
+- **Rip**: confirm or change the folder, then watch per-title progress. A failed
+  title asks whether to retry, skip it, or abort.
+- **Tracks**: every audio and subtitle track from the ripped file, with codec,
+  bitrate, quality, preset and tune pickers. Defaults are what the old prompts
+  defaulted to.
+- **Review**: one row per job. `o` gives one file its own settings, `x` skips a
+  file, `m` skips every file whose tracks differ from the first, `n` goes back to
+  naming, ctrl+s queues.
+
+Esc goes back a step at any point (except back into the rip once it has started),
+and ctrl+q quits. Add `--plain` for the old line-by-line prompts.
 
 ```bash
 rne ingest           # default minlength: 900s (filters short bonus clips)
@@ -67,7 +83,7 @@ rne ingest -n "Aliens"                   # name only — content type still prom
 - `-sn` / `--season` — season number (0 for specials). TV only.
 - `-fe` / `--first-episode` — first episode number. TV only.
 
-Providing `-sn` or `-fe` implies TV episodes, so the content-type prompt is skipped. Anything not provided is still prompted for. When all three are given, the only metadata prompt left is the `→ titles will be ...` confirmation.
+The flags pre-fill the Naming step; you still see it, so the episode preview can be checked. (With `--plain`: providing `-sn` or `-fe` implies TV episodes, so the content-type prompt is skipped. Anything not provided is still prompted for. When all three are given, the only metadata prompt left is the `→ titles will be ...` confirmation.)
 
 Example session flow:
 
@@ -95,6 +111,9 @@ rne queue /path/to/file.mkv           # single file
 rne queue /path/to/directory/         # all .mkv files in the directory, alphabetical order
 rne queue --dvd /path/to/file.mkv     # treat source as DVD (forces detelecine prompt for NTSC frame rates)
 ```
+
+`rne queue` opens the same full-screen app, starting at Naming (the file list is
+shown there) and skipping the rip. `--plain` gives the old prompts.
 
 The `--dvd` flag is only needed when the source codec isn't `mpeg2video` — for genuine DVD rips the flag is usually redundant, but it's there as an override.
 

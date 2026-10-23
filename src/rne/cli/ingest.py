@@ -4,8 +4,9 @@ import pathlib
 import subprocess
 import sys
 
-from rne import config, db, makemkv, notify, plan
+from rne import config, db, makemkv, notify, plan, probe
 from rne.cli._pipeline import (
+    mungefilename,
     preview_and_confirm,
     probe_and_display,
     prompt_disc_split,
@@ -159,22 +160,24 @@ def _load_notify_config_or_exit() -> config.NotifyConfig:
         raise SystemExit(2) from None
 
 
-def _notify_rip_complete(cfg: config.NotifyConfig, **values: object) -> None:
+def notify_message(cfg: config.NotifyConfig, **values: object) -> str | None:
     """Best-effort 'the disc is done' push. Never raises, never blocks for long.
 
-    Reports either way and returns: the user is standing by to answer the track
-    prompts, and a broker that is down is not their problem right now.
+    Returns the one line to show (None when notifications aren't set up).
     """
     if cfg.mqtt is None:
-        if cfg.skipped:
-            print(f"\nNotification skipped: {cfg.skipped}.")
-        return
-
+        return f"Notification skipped: {cfg.skipped}." if cfg.skipped else None
     result = notify.send(cfg.mqtt, values)
-    if result.ok:
-        print(f"\nNotification sent: {result.detail}")
-    else:
-        print(f"\nNotification failed: {result.detail}", file=sys.stderr)
+    return f"Notification {'sent' if result.ok else 'failed'}: {result.detail}"
+
+
+def _notify_rip_complete(cfg: config.NotifyConfig, **values: object) -> None:
+    """Print the notification result. The user is standing by to answer the
+    track prompts, and a broker that is down is not their problem right now.
+    """
+    message = notify_message(cfg, **values)
+    if message:
+        print(f"\n{message}", file=sys.stderr if "failed:" in message else sys.stdout)
 
 
 # ---------------------------------------------------------------------------
@@ -183,6 +186,69 @@ def _notify_rip_complete(cfg: config.NotifyConfig, **values: object) -> None:
 
 
 def run(args, roots: config.Roots) -> None:
+    if getattr(args, "plain", False):
+        run_plain(args, roots)
+    else:
+        run_tui(args, roots)
+
+
+def run_tui(args, roots: config.Roots) -> None:
+    """Full-screen ingest: titles → naming → rip → tracks → review."""
+    from rne.tui import flow
+    from rne.tui.pipeline import PipelineApp
+
+    notify_cfg = _load_notify_config_or_exit()
+    print("Reading disc ...")
+    try:
+        disc_info, titles = makemkv.run_info(source=args.source, minlength=args.minlength)
+    except subprocess.CalledProcessError:
+        sys.exit(1)
+    if not titles:
+        print("No titles found on disc.", file=sys.stderr)
+        sys.exit(1)
+    volume_name = disc_info.get(makemkv.C_VOLUME_NAME, "UNKNOWN")
+
+    conn = db.connect()
+    db.init_db(conn)
+    draft = flow.Draft(
+        mode="ingest",
+        naming=flow.Naming(
+            is_tv=True,
+            title=mungefilename(args.name) if args.name is not None else volume_name,
+            season=args.season,
+            first_episode=args.first_episode,
+        ),
+        staging_root=roots.staging_root,
+    )
+    app = PipelineApp(
+        draft,
+        conn=conn,
+        prober=lambda path: probe.summarize(probe.probe(str(path))),
+        chapter_prober=lambda path: probe.probe_chapters(str(path)),
+        titles=titles,
+        display_order=_build_display_order(titles),
+        volume_name=volume_name,
+        ripper=lambda idx, raw_dir, on_event: makemkv.rip_title(
+            args.source, idx, raw_dir, args.minlength, on_event
+        ),
+        notifier=lambda **values: notify_message(notify_cfg, **values),
+        auto_retries=config.RIP_RETRIES,
+        batch_notes=volume_name,
+    )
+    finish(app.run())
+
+
+def finish(result: tuple[list[str], bool] | None) -> None:
+    """Print what the app reported and exit non-zero if it failed."""
+    lines, ok = result or (["Quit; nothing was queued."], True)
+    for line in lines:
+        print(line, file=sys.stdout if ok else sys.stderr)
+    if not ok:
+        sys.exit(1)
+
+
+def run_plain(args, roots: config.Roots) -> None:
+    """The pre-v0.6 line-by-line prompts (rne ingest --plain)."""
     minlength: int = args.minlength
     source: str = args.source
     notify_cfg = _load_notify_config_or_exit()

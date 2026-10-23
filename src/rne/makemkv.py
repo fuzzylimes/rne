@@ -6,6 +6,9 @@ import pathlib
 import re
 import subprocess
 import sys
+from collections import deque
+from dataclasses import dataclass
+from typing import Callable, Iterable
 
 # TINFO codes (title-level metadata)
 T_CHAPTERS = 8
@@ -233,11 +236,107 @@ def rip_and_detect(
     ]
     print(f"\n$ {' '.join(cmd)}")
     subprocess.run(cmd, check=True)
-    after = set(raw_dir.glob("*.mkv"))
-    new = after - before
+    return _new_mkv(raw_dir, before, title_idx)
+
+
+def _new_mkv(raw_dir: pathlib.Path, before: set[pathlib.Path], title_idx: int) -> pathlib.Path:
+    new = set(raw_dir.glob("*.mkv")) - before
     if len(new) != 1:
         raise MakemkvError(
             f"expected 1 new .mkv after ripping title {title_idx}, "
             f"got {len(new)}: {sorted(str(p) for p in new)}"
         )
     return next(iter(new))
+
+
+# ---------------------------------------------------------------------------
+# Ripping with progress reporting (used by the terminal UI)
+# ---------------------------------------------------------------------------
+
+PROGRESS_MAX = 65536  # PRGV max in robot mode
+
+
+@dataclass(frozen=True)
+class RipEvent:
+    """One interesting line of `makemkvcon -r --progress=-same mkv` output.
+
+    kind is "progress" (fraction 0..1 of the whole title), "task" (text names
+    the current step, e.g. "Saving to MKV file"), or "message" (text is a
+    human-readable MSG row).
+    """
+
+    kind: str
+    fraction: float = 0.0
+    text: str = ""
+
+
+def parse_rip_line(line: str) -> RipEvent | None:
+    """Pure: turn one robot-mode line into a RipEvent, or None if uninteresting."""
+    parsed = parse_line(line.rstrip("\n"))
+    if not parsed:
+        return None
+    prefix, f = parsed
+    if prefix == "PRGV" and len(f) >= 3:
+        try:
+            total, maximum = int(f[1]), int(f[2]) or PROGRESS_MAX
+        except ValueError:
+            return None
+        return RipEvent("progress", fraction=min(max(total / maximum, 0.0), 1.0))
+    if prefix in ("PRGT", "PRGC") and len(f) >= 3:
+        return RipEvent("task", text=f[2])
+    if prefix == "MSG" and len(f) >= 4 and f[3]:
+        return RipEvent("message", text=f[3])
+    return None
+
+
+class RipFailed(MakemkvError):
+    """makemkvcon exited non-zero. messages holds its last MSG rows."""
+
+    def __init__(self, title_idx: int, returncode: int, messages: list[str]) -> None:
+        detail = messages[-1] if messages else "no message"
+        super().__init__(f"title {title_idx}: makemkvcon exited {returncode} ({detail})")
+        self.messages = messages
+
+
+def rip_title(
+    source: str,
+    title_idx: int,
+    raw_dir: pathlib.Path,
+    minlength: int,
+    on_event: Callable[[RipEvent], None],
+    *,
+    run: Callable[[list[str]], tuple[Iterable[str], Callable[[], int]]] | None = None,
+) -> pathlib.Path:
+    """Rip one title, reporting progress through on_event; return the new MKV.
+
+    Same contract as rip_and_detect (same command apart from robot-mode
+    output, same before/after detection), but raises RipFailed instead of
+    CalledProcessError so the caller gets makemkv's own explanation.
+    run is for tests: given the command, return (output lines, wait()).
+    """
+    before = set(raw_dir.glob("*.mkv"))
+    cmd = [
+        "makemkvcon", "-r", "--progress=-same", f"--minlength={minlength}",
+        "mkv", source, str(title_idx), str(raw_dir),
+    ]
+    lines, wait = (run or _popen_lines)(cmd)
+    messages: deque[str] = deque(maxlen=20)
+    for line in lines:
+        event = parse_rip_line(line)
+        if event is None:
+            continue
+        if event.kind == "message":
+            messages.append(event.text)
+        on_event(event)
+    returncode = wait()
+    if returncode != 0:
+        raise RipFailed(title_idx, returncode, list(messages))
+    return _new_mkv(raw_dir, before, title_idx)
+
+
+def _popen_lines(cmd: list[str]) -> tuple[Iterable[str], Callable[[], int]]:
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
+    )
+    assert proc.stdout is not None
+    return proc.stdout, proc.wait
