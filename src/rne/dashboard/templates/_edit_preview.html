@@ -1,0 +1,20 @@
+<div class="preview" data-errors="{{ errors|length }}">
+  {% if errors %}
+  <div class="flash flash-error">
+    <strong>Fix before saving:</strong>
+    <ul>{% for e in errors %}<li>{{ e }}</li>{% endfor %}</ul>
+  </div>
+  {% endif %}
+  {% if results %}
+  <p class="preview-title">Files after saving</p>
+  <ul class="preview-files">
+    {% for r in results %}
+    <li>
+      <strong>{{ r.label }}</strong>
+      <span class="path">{{ r.output_path }}</span>
+      {% if r.final_path %}<small class="muted">then to the library: <span class="path">{{ r.final_path }}</span></small>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>

@@ -8,7 +8,7 @@ Three processes coordinate through a single SQLite database:
 
 - **`rne ingest`** — interactive command you run with a disc in the drive. Detects titles, prompts for selections and encoding parameters, rips, probes, and queues the jobs. Done in minutes.
 - **`rne-worker`** — long-running daemon under systemd. Claims queued jobs, runs HandBrakeCLI, writes progress and results back to the DB. One job at a time.
-- **`rne-dashboard`** — Flask web UI at `http://localhost:8500/`. Shows the queue, live encode progress, and recent history. Pause/resume/retry from the browser.
+- **`rne-dashboard`** — Flask web UI at `http://localhost:8500/`. Shows the queue, live encode progress, and recent history. Works on phones. Tap a job to see its tracks and settings, edit it (or its whole batch), cancel or re-encode it; drag jobs to reorder the queue.
 
 ## Quick install (on the rip VM)
 
@@ -340,7 +340,7 @@ rne edit --batch <n>   # edit every job from one disc at once (e.g. fix the firs
 rne edit <id> --raw    # edit handbrake_args JSON in $EDITOR (old behaviour)
 ```
 
-Pause/resume/retry are also available as buttons on the dashboard.
+Pause/resume/retry/cancel, editing (`rne edit`'s form, in the browser) and reordering are also available on the dashboard.
 
 ### Probe a file
 

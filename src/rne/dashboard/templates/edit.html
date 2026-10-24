@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+{% block title %}{{ heading }} · rne{% endblock %}
+{% macro options(choices, current) -%}
+{% for c in choices %}<option value="{{ c.value }}"{% if c.value == current %} selected{% endif %}>{{ c.label }}</option>{% endfor %}
+{%- endmacro %}
+{% block content %}
+<nav class="back"><a href="{{ cancel_url }}">← Back</a></nav>
+<h1 class="page-title">{{ heading }}</h1>
+
+{% if form.batch %}
+<p class="hint">
+  {{ form.targets|length }} jobs ({{ form.targets|map(attribute='label')|join(', ') }}).
+  Settings apply to all of them; each keeps its own chapter range.
+</p>
+{% elif form.first.status == 'done' %}
+<p class="flash flash-warn">This job is done. Saving doesn't encode it again: use Re-encode on the job page afterwards.</p>
+{% endif %}
+{% if not form.batch and form.first.move_state == 'moved' %}
+<p class="flash flash-warn">Already moved to the library; changes here don't move it again.</p>
+{% endif %}
+{% for t in form.unreadable %}
+<p class="flash flash-warn">{{ t.label }}: {{ t.probe_error }}. Tracks can't be listed or checked without the file, but everything can still be changed.</p>
+{% endfor %}
+
+<form id="edit-form" method="post" action="{{ action }}" novalidate>
+  {% for t in form.targets %}<input type="hidden" name="job" value="{{ t.job_id }}">{% endfor %}
+  <input type="hidden" name="initial_title" value="{{ form.initial_title }}">
+  <input type="hidden" name="initial_move" value="{{ '1' if form.initial_move else '0' }}">
+  <input type="hidden" name="initial_library" value="{{ form.initial_library }}">
+  <input type="hidden" name="tvdb_id" value="{{ form.tvdb_id }}">
+  <input type="hidden" name="tvdb_title" value="{{ form.tvdb_title }}">
+
+  {# ── Naming ── #}
+  <fieldset>
+    <legend>Naming</legend>
+    <label for="title">{{ 'Show' if form.is_tv else 'Movie' }}</label>
+    <div class="input-row">
+      <input id="title" name="title" value="{{ form.title }}" autocomplete="off" autocapitalize="words" required>
+      {% if tvdb_on %}
+      <button type="button" id="tvdb-find" class="secondary outline"
+              data-kind="{{ 'series' if form.is_tv else 'movie' }}">Find on TVDB</button>
+      {% endif %}
+    </div>
+    <small id="tvdb-note" class="muted">
+      {%- if not tvdb_on %}{% if tvdb_note %}TVDB lookup off: {{ tvdb_note }}{% endif %}
+      {%- elif form.first.tvdb_id and not form.batch %}TVDB #{{ form.first.tvdb_id }}
+      {%- endif -%}
+    </small>
+    <div id="tvdb-results" aria-live="polite"></div>
+
+    <div class="grid-fields">
+      <label>Year
+        <input name="year" value="{{ form.year }}" inputmode="numeric" pattern="[0-9]*" placeholder="optional">
+      </label>
+      {% if form.is_tv %}
+      <label>Season
+        <input name="season" value="{{ form.season }}" inputmode="numeric" pattern="[0-9]*">
+      </label>
+      <label>{{ 'First episode' if form.batch else 'Episode' }}
+        <input name="episode" value="{{ form.episode }}" inputmode="numeric" pattern="[0-9]*">
+      </label>
+      {% endif %}
+    </div>
+  </fieldset>
+
+  {# ── Library ── #}
+  <fieldset>
+    <legend>Library</legend>
+    <label><input type="checkbox" role="switch" name="move" value="1" id="move"{% if form.move %} checked{% endif %}>
+      Move to the library when encoded</label>
+    <label id="library-row"{% if not form.move %} hidden{% endif %}>Library folder
+      <input name="library" value="{{ form.library }}" autocomplete="off" autocapitalize="off" spellcheck="false"
+             placeholder="/path/to/{{ 'Shows/Show (Year)' if form.is_tv else 'Movies/Movie (Year)' }}">
+    </label>
+  </fieldset>
+
+  <div id="preview" aria-live="polite">{% include "_edit_preview.html" %}</div>
+
+  {# ── Audio ── #}
+  <fieldset>
+    <legend>Audio</legend>
+    <p class="hint">Tick the tracks to keep. The first kept track plays by default; ▲ ▼ change the order.</p>
+    <ol class="track-rows" id="audio-rows">
+      {% for row in form.audio %}
+      <li class="track-row{% if not row.include %} excluded{% endif %}">
+        <input type="hidden" name="audio_order" value="{{ row.track }}">
+        <div class="track-head">
+          <label class="track-include">
+            <input type="checkbox" name="audio_include" value="{{ row.track }}"{% if row.include %} checked{% endif %}>
+            <span>{{ row.label }}</span>
+          </label>
+          <button type="button" class="icon secondary outline move-up" aria-label="Move track {{ row.track }} up">▲</button>
+          <button type="button" class="icon secondary outline move-down" aria-label="Move track {{ row.track }} down">▼</button>
+        </div>
+        <div class="track-controls">
+          <select name="audio_codec_{{ row.track }}" class="codec" aria-label="Codec for track {{ row.track }}">
+            {{ options(form.codec_choices(row), row.codec) }}
+          </select>
+          <select name="audio_bitrate_{{ row.track }}" class="bitrate" aria-label="Bitrate for track {{ row.track }}"
+                  {% if row.codec == 'copy' %}hidden{% endif %}>
+            {{ options(form.bitrate_choices(row), (row.bitrate or row.recommended_bitrate)|string) }}
+          </select>
+        </div>
+      </li>
+      {% endfor %}
+    </ol>
+  </fieldset>
+
+  {# ── Subtitles ── #}
+  <fieldset>
+    <legend>Subtitles</legend>
+    {% if form.subtitles %}
+    <p class="hint">Few frames usually means a forced-only track.</p>
+    <ul class="track-rows" id="sub-rows">
+      {% for row in form.subtitles %}
+      <li class="track-row{% if not row.include %} excluded{% endif %}">
+        <label class="track-include">
+          <input type="checkbox" name="sub_include" value="{{ row.track }}"{% if row.include %} checked{% endif %}>
+          <span>{{ row.label }}</span>
+        </label>
+        <label class="sub-default">
+          <input type="radio" name="sub_default" value="{{ row.track }}"{% if row.default %} checked{% endif %}> Default
+        </label>
+      </li>
+      {% endfor %}
+    </ul>
+    <label class="no-default">
+      <input type="radio" name="sub_default" value=""{% if not form.subtitles|selectattr('default')|list %} checked{% endif %}>
+      No default subtitle
+    </label>
+    {% elif form.summary is none %}
+    <p class="hint">No subtitle tracks chosen.</p>
+    {% else %}
+    <p class="hint">No subtitle tracks in the source.</p>
+    {% endif %}
+  </fieldset>
+
+  {# ── Encode ── #}
+  <fieldset>
+    <legend>Encode</legend>
+    <div class="grid-fields">
+      <label>Quality (RF)
+        <select name="quality">{{ options(form.quality_choices(), form.quality|string) }}</select>
+        <small class="muted">Lower = better quality, bigger file.</small>
+      </label>
+      <label>Preset
+        <select name="preset">{{ options(form.preset_choices(), form.preset) }}</select>
+        <small class="muted">Slower = smaller file at the same quality.</small>
+      </label>
+      <label>Tune
+        <select name="tune">{{ options(form.tune_choices(), form.tune) }}</select>
+        <small class="muted">“animation” for cartoons and anime.</small>
+      </label>
+    </div>
+    <label><input type="checkbox" role="switch" name="detelecine" value="1"{% if form.detelecine %} checked{% endif %}> Detelecine</label>
+    {% if form.detelecine_reason() %}<small class="muted reason">{{ form.detelecine_reason() }}</small>{% endif %}
+    <label><input type="checkbox" role="switch" name="decomb" value="1"{% if form.decomb %} checked{% endif %}> Decomb</label>
+    {% if form.decomb_reason() %}<small class="muted reason">{{ form.decomb_reason() }}</small>{% endif %}
+  </fieldset>
+
+  <div class="save-bar">
+    <button type="submit" id="save">Save{% if form.batch %} {{ form.targets|length }} jobs{% endif %}</button>
+    <a role="button" class="secondary outline" href="{{ cancel_url }}">Cancel</a>
+    <small id="save-note" class="bad">{% if submitted and errors %}{{ errors|length }} problem(s) above{% endif %}</small>
+  </div>
+</form>
+{% endblock %}
+{% block scripts %}
+<script>rne.editForm(document.getElementById('edit-form'));</script>
+{% endblock %}

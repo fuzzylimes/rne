@@ -285,7 +285,7 @@ queued → running → done
               └── → interrupted   (worker killed mid-encode)
 
 queued ↔ paused                   (toggle from dashboard)
-queued → cancelled                (CLI only, terminal)
+queued → cancelled                (CLI, or dashboard job page; terminal)
 {any terminal state} → queued     (retry; resets row, bumps attempt_count)
 ```
 
@@ -1128,64 +1128,114 @@ def setup_signal_handlers():
 
 ## Dashboard design
 
+Used about as much from a phone as from a desktop, so every page is laid out
+phone-first: lists instead of tables, tap targets at least ~44px, and actions
+for one job live on that job's page instead of crowding the list.
+
 ### Stack
 
-- **Flask**, server-rendered Jinja templates, no JS framework, no fetch, no JSON API.
-- **Pico CSS** via CDN — classless, ~10 KB, responsive, dark mode forced (`data-theme="dark"`).
-- **Auto-refresh** via `<meta http-equiv="refresh" content="30">`. The page reloads every 30 seconds, picks up new state, re-renders. Crude and perfect for a single-user LAN dashboard.
+- **Flask**, server-rendered Jinja templates. *v0.6 change (agreed with the author):* a small
+  plain-JS file (`dashboard/static/dashboard.js`) adds updates in place,
+  drag-and-drop reordering and the edit form's live preview. Every page
+  still works without JavaScript, only less smoothly.
+- **Pico CSS** (pinned, `@picocss/pico@2.1.1`) via CDN, dark theme forced, plus
+  `dashboard/static/dashboard.css`.
+- **SortableJS** (pinned, `sortablejs@1.15.6`) via CDN, on the index only, for
+  drag-and-drop with touch support.
+- **Updates in place** replace v0.5's `<meta http-equiv="refresh">`, which reloaded the
+  whole page and wiped any drag or open form. The index polls `/partials/live` every
+  15 seconds (the worker saves progress every 20s and its heartbeat every 10s) and swaps the HTML in place. Polling pauses while a drag is in progress or the
+  tab is hidden. Without JavaScript a `<noscript>` meta refresh (30s) remains. The
+  job page reloads itself every 15s only while that job is encoding or moving. Edit
+  pages never refresh.
+- Still no JSON API: everything returns HTML, either a page or a fragment.
+  The one exception is `/queue/order`, which answers `204 No Content`.
 
 ### Endpoints
 
 | Method | Path | Action |
 |---|---|---|
-| GET | `/` | render queue |
-| POST | `/jobs/<id>/pause` | `status: queued → paused` |
-| POST | `/jobs/<id>/resume` | `status: paused → queued` |
-| POST | `/jobs/<id>/retry` | `status: any terminal → queued` (reset attempt fields) |
-| POST | `/queue/pause` | set `queue_settings.paused = 1` |
-| POST | `/queue/resume` | set `queue_settings.paused = 0` |
+| GET | `/` | the queue (running card, queued list, recent 24h) |
+| GET | `/partials/live` | the same content without the page shell, for polling |
+| GET | `/jobs/<id>` | job page: files, chosen settings against the source's tracks, HandBrake command preview, history, all actions |
+| GET/POST | `/jobs/<id>/edit` | edit one job (naming, library destination, tracks, encode settings) |
+| GET/POST | `/batches/<id>/edit` | edit a batch's non-running jobs together; renumbers episodes from the first |
+| GET | `/tvdb/search?q=&kind=series\|movie` | TVDB matches as an HTML fragment (edit form) |
+| POST | `/queue/order` | `ids=…` in the new order → `jobs.reorder` |
+| POST | `/jobs/<id>/top`, `/batches/<id>/top` | run this job / this batch's waiting jobs next |
+| POST | `/jobs/<id>/pause`, `/resume` | `queued ↔ paused` |
+| POST | `/jobs/<id>/cancel` | `queued/paused → cancelled` (asks to confirm) |
+| POST | `/jobs/<id>/retry` | any terminal → `queued` (Retry, or Re-encode for done jobs) |
+| POST | `/jobs/<id>/move` | queue a library move for a done job |
+| POST | `/queue/pause`, `/queue/resume` | the global pause flag |
 
-Every POST does its DB update, then `redirect('/', 303)`. PRG pattern — the browser's address bar lands back on `/`, refresh doesn't re-submit.
+POSTs follow PRG: update, then `redirect(next or '/', 303)`. `next` must be a
+local path. A POST sent with the `X-Rne-Async: 1` header (the index's own
+buttons) gets `204` instead, and the page redraws from `/partials/live`.
+Messages after an action (e.g. "Job 5 (S01E09) updated.") use Flask's
+`flash`, signed with a random per-process key. A restart only drops
+unread messages.
+
+### Queue order
+
+The worker claims by `(priority, id)`, and new jobs get `priority = 0`.
+`jobs.reorder(ids)` gives the waiting (queued + paused) jobs priorities `-N..-1`
+in the order given. Jobs queued later (priority 0) still run after them.
+Ids that are no longer waiting are ignored. Waiting jobs the request leaves out,
+because they were queued after the page was drawn, keep their order after the
+listed ones. The renumbering runs under `BEGIN IMMEDIATE`. "Run next" and
+"Run this batch next" are `reorder` with those ids first.
+
+### Editing
+
+The form is the web version of `rne edit`. `dashboard/forms.py` reads it into the
+same `jobs.plan_edits` / `jobs.apply_edits` calls, so the rules are identical:
+- Track choices come from the source probe snapshot.
+- An untouched field keeps each job's own value. The form carries its starting
+  name, library folder and move flag as hidden fields.
+- A new name drops the old TVDB id unless a match was picked.
+- Saving refuses a job the worker is running, checked in the same SQL statement as the update.
+
+A batch form carries its job ids, so a job that starts while the form is open
+keeps its place in the episode numbering and is reported "not changed". As you
+type, the form posts itself with `X-Rne-Preview: 1` and shows the resulting file
+names and library paths, plus anything that would block saving. A submission
+with errors re-renders with what was typed (HTTP 422).
 
 ### Layout
 
-Three sections, each a separate SQL query:
-
 ```
-┌──────────────────────────────────────────────────────────┐
-│  rne                          Worker: idle • 8s ago      │
-│                               [Pause queue] [Resume]      │
-├──────────────────────────────────────────────────────────┤
-│  Running                                                  │
-│  ─────────                                                │
-│  S01E05  Initial D            ████████░░░░ 67% • 42 fps  │
-│                                            ETA 00:08:14   │
-│                                                           │
-│  Queued (3)                                               │
-│  ─────────                                                │
-│  S01E06  Initial D                          [Pause]       │
-│  S01E07  Initial D                          [Pause]       │
-│  S01E08  Initial D                          [Pause]       │
-│                                                           │
-│  Recent (last 24h)                                        │
-│  ─────────                                                │
-│  S01E04  Initial D            done       2026-05-04 22:14│
-│  S01E03  Initial D            failed     [Retry] exit 1  │
-│  S01E02  Initial D            done       2026-05-04 18:02│
-└──────────────────────────────────────────────────────────┘
+rne   ● Worker encoding · 8s ago            [Pause queue]
+RUNNING
+┌──────────────────────────────────────────────────────┐
+│ S01E04 Initial D (1998)                              │
+│ ███████████████████████░░░░░░░░░                     │
+│ 67.3% · 42.1 fps · ETA 00:08:14                      │
+└──────────────────────────────────────────────────────┘
+QUEUED 5
+⠿  S01E05 Initial D (1998)                     [Pause]
+   RF 20 · slow · animation · 2 audio · 1 sub
+⠿  [Paused] S01E07 Initial D (1998)           [Resume]
+RECENT last 24h
+[Failed] S01E03 Initial D (1998)               [Retry]
+   5:37 PM · HandBrakeCLI exited 3 …
+[Done] S01E01 Initial D (1998)
+   3:37 PM · in library ✓
 ```
 
-- **Running** — the one currently encoding job. Live progress bar, fps, ETA. If no job is running, this section doesn't render. No "nothing running" placeholder.
-- **Queued + Paused** — counted in the header, listed in `(priority, id)` order. Each row gets one button: `Pause` if queued, `Resume` if paused. Long queues scroll within the page.
-- **Recent (last 24h)** — terminal jobs, newest first, capped at 50. `done` shows `finished_at`. `failed`/`interrupted`/`cancelled` show a Retry button and the `error_message` snippet. Older history queryable via `rne ls --all`.
+- **Running**: a card linking to the job, with a progress bar, fps and ETA. Hidden when nothing is running.
+- **Queued + Paused**: in claim order. Each row has a drag handle, a one-line settings summary,
+  and Pause/Resume. Tapping a row opens the job page.
+- **Recent (last 24h)**: terminal jobs, newest first, capped at 50. Retry for
+  failed/interrupted/cancelled jobs, Retry move for a failed move. Re-encode for a
+  done job moved to the job page, behind a confirm, so it can't be tapped by accident.
+- **Job page**: actions first (Edit, Edit whole batch, Run next, Run this batch next,
+  Pause/Resume, Cancel, Retry/Re-encode, Retry move), then files, settings
+  (each source track marked kept or not kept), a collapsible HandBrake command, and history.
 
 ### Header
 
-Worker heartbeat indicator: green dot if `last_seen` within 30s, amber 30–90s, red beyond, "Worker offline" if stale beyond a couple of minutes. Pause/resume queue buttons toggle the global flag. When paused, the running job continues (matches worker behavior — pause is between-jobs only) but a banner reads "Queue paused".
-
-### Mobile
-
-Pico's defaults handle narrow viewports. No mobile-specific overrides — the table layout reflows naturally and all columns remain visible at small widths.
+Worker heartbeat indicator: green dot if `last_seen` within 30s, amber 30–90s, red beyond, "offline" if stale beyond a couple of minutes. One button toggles the global pause flag: "Pause queue", or "Resume queue" while paused. When paused, the running job continues (matches worker behavior — pause is between-jobs only) but a banner reads "Queue paused".
 
 ### Auth
 

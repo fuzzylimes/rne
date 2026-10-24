@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from flask import Flask, g
 
 from rne import config, db
@@ -7,6 +9,8 @@ from rne import config, db
 
 def create_app() -> Flask:
     app = Flask(__name__)
+    # Only signs the one-shot "saved" messages; a restart just drops unread ones.
+    app.secret_key = os.urandom(16)
 
     # Bring the schema up to date before serving, in case the dashboard
     # starts before the worker after an upgrade.

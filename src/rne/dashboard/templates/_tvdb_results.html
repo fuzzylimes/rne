@@ -1,0 +1,20 @@
+{% if error %}
+<p class="flash flash-warn">{{ error }}</p>
+{% elif not matches %}
+<p class="hint">No TVDB matches for “{{ query }}”. Edit the name and search again, or keep it as typed.</p>
+{% else %}
+<p class="hint">{{ matches|length }} match(es). Tap one to use its name and year.</p>
+<ul class="tvdb-matches">
+  {% for m in matches %}
+  <li>
+    <button type="button" class="tvdb-pick secondary outline"
+            data-name="{{ clean(m.name) }}" data-year="{{ m.year or '' }}" data-id="{{ m.tvdb_id }}">
+      <strong>{{ m.name }}</strong>{% if m.year %} ({{ m.year }}){% endif %}
+      <small class="muted">{{ [m.network, m.country]|select|join(' · ') }}</small>
+      {% if m.overview %}<small class="overview">{{ m.overview|truncate(160) }}</small>{% endif %}
+    </button>
+  </li>
+  {% endfor %}
+</ul>
+<button type="button" class="tvdb-close secondary outline btn-sm">Keep the name as typed</button>
+{% endif %}

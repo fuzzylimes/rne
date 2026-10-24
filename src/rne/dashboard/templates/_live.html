@@ -1,0 +1,107 @@
+{# The part of the index that updates itself. Fetched from /partials/live. #}
+{% macro job_line(job, pill=None) -%}
+<span class="job-line">
+  {%- if pill %}<span class="status-pill pill-{{ pill }}">{{ pill|capitalize }}</span>{% endif -%}
+  <span class="ep">{{ job.label }}</span>
+  <span class="name">{{ job.name }}</span>
+</span>
+{%- endmacro %}
+
+<header class="topbar">
+  <a class="brand" href="/">rne</a>
+  <span class="worker" title="{{ worker.last_seen or 'never seen' }}">
+    <span class="dot dot-{{ worker.indicator }}"></span>
+    Worker {{ worker.state }}{% if worker.ago is not none %} · {{ worker.ago }}s ago{% endif %}
+  </span>
+  {% if queue_paused %}
+  <form class="js-async" action="/queue/resume" method="post">
+    <button type="submit" class="btn-sm">Resume queue</button>
+  </form>
+  {% else %}
+  <form class="js-async" action="/queue/pause" method="post">
+    <button type="submit" class="btn-sm secondary outline">Pause queue</button>
+  </form>
+  {% endif %}
+</header>
+
+{% if queue_paused %}
+<div class="banner-paused">Queue paused — the worker won't start new jobs</div>
+{% endif %}
+
+{% if running %}
+<section>
+  <h2 class="section-title">Running</h2>
+  <a class="card running" href="/jobs/{{ running.id }}">
+    {{ job_line(running) }}
+    {% if running.progress_pct is not none %}
+    <span class="bar"><span style="width:{{ running.progress_pct|int }}%"></span></span>
+    <span class="meta">
+      {{ '%.1f'|format(running.progress_pct) }}%
+      {%- if running.progress_fps is not none %} · {{ '%.1f'|format(running.progress_fps) }} fps{% endif %}
+      {%- if running.eta_fmt %} · ETA {{ running.eta_fmt }}{% endif %}
+    </span>
+    {% else %}
+    <span class="meta">Starting…</span>
+    {% endif %}
+  </a>
+</section>
+{% endif %}
+
+<section>
+  <h2 class="section-title">Queued{% if queued %} <span class="count">{{ queued|length }}</span>{% endif %}</h2>
+  {% if queued %}
+  <ul class="jobs" id="queue">
+    {% for job in queued %}
+    <li class="job" data-id="{{ job.id }}">
+      <span class="handle" title="Drag to reorder" aria-label="Drag to reorder">⠿</span>
+      <a class="job-main" href="/jobs/{{ job.id }}">
+        {{ job_line(job, 'paused' if job.status == 'paused' else None) }}
+        <span class="meta">{{ job.settings }}</span>
+      </a>
+      <form class="js-async" action="/jobs/{{ job.id }}/{{ 'resume' if job.status == 'paused' else 'pause' }}" method="post">
+        <button type="submit" class="btn-sm secondary outline">{{ 'Resume' if job.status == 'paused' else 'Pause' }}</button>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+  <p class="hint">Drag ⠿ to reorder. Tap a job for details, editing and more.</p>
+  {% else %}
+  <p class="hint">Nothing queued.</p>
+  {% endif %}
+</section>
+
+<section>
+  <h2 class="section-title">Recent <span class="count">last 24h</span></h2>
+  {% if recent %}
+  <ul class="jobs">
+    {% for job in recent %}
+    <li class="job">
+      <a class="job-main" href="/jobs/{{ job.id }}">
+        {{ job_line(job, job.status) }}
+        <span class="meta">
+          {%- if job.finished_at %}<time class="js-utc-time" data-utc="{{ job.finished_at }}">{{ job.finished_at }}</time>{% endif %}
+          {%- if job.status == 'done' and job.final_path %}
+            {%- if job.move_state == 'moved' %} · in library ✓
+            {%- elif job.move_state in ('pending', 'moving') %} · moving to library…
+            {%- else %} · <span class="bad">move failed: {{ (job.move_error or '')[:80] }}</span>
+            {%- endif %}
+          {%- endif %}
+          {%- if job.error_message %} · <span class="bad">{{ job.error_message[:80] }}</span>{% endif %}
+        </span>
+      </a>
+      {% if job.status != 'done' %}
+      <form class="js-async" action="/jobs/{{ job.id }}/retry" method="post">
+        <button type="submit" class="btn-sm">Retry</button>
+      </form>
+      {% elif job.final_path and job.move_state not in ('moved', 'pending', 'moving') %}
+      <form class="js-async" action="/jobs/{{ job.id }}/move" method="post">
+        <button type="submit" class="btn-sm">Retry move</button>
+      </form>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="hint">No finished jobs in the last 24 hours.</p>
+  {% endif %}
+</section>

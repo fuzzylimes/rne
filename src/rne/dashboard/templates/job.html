@@ -1,0 +1,168 @@
+{% extends "base.html" %}
+{% block title %}{{ job.label }} · {{ job.name }} · rne{% endblock %}
+{% block head %}
+{% if job.status == 'running' or job.move_state in ('pending', 'moving') %}
+{# Nothing to type on this page, so a plain reload keeps progress current. #}
+<meta http-equiv="refresh" content="15">
+{% endif %}
+{% endblock %}
+{% block content %}
+{% set here = '/jobs/' ~ job.id %}
+{% set waiting = job.status in ('queued', 'paused') %}
+
+<nav class="back"><a href="/">← Queue</a></nav>
+
+<hgroup class="job-title">
+  <h1>
+    <span class="status-pill pill-{{ job.status }}">{{ job.status|capitalize }}</span>
+    {{ job.label }} · {{ job.name }}
+  </h1>
+  <p>
+    Job {{ job.id }}
+    {%- if position %} · {{ position }} of {{ queue_length }} in the queue{% endif %}
+    {%- if job.batch_label %} · batch “{{ job.batch_label }}”{% if batch_count > 1 %} ({{ batch_count }} jobs){% endif %}{% endif %}
+  </p>
+</hgroup>
+
+{% if job.status == 'running' %}
+<article class="card running">
+  {% if job.progress_pct is not none %}
+  <span class="bar"><span style="width:{{ job.progress_pct|int }}%"></span></span>
+  <span class="meta">
+    {{ '%.1f'|format(job.progress_pct) }}%
+    {%- if job.progress_fps is not none %} · {{ '%.1f'|format(job.progress_fps) }} fps{% endif %}
+    {%- if job.eta_fmt %} · ETA {{ job.eta_fmt }}{% endif %}
+  </span>
+  {% else %}
+  <span class="meta">Starting…</span>
+  {% endif %}
+</article>
+{% endif %}
+
+{% if job.error_message %}
+<p class="flash flash-error">{{ job.error_message }}</p>
+{% endif %}
+{% if job.move_state == 'failed' %}
+<p class="flash flash-error">Move to the library failed: {{ job.move_error }}</p>
+{% endif %}
+
+{# ── Actions ── #}
+<div class="actions">
+  {% if job.status != 'running' %}
+  <a role="button" href="{{ here }}/edit">Edit</a>
+  {% endif %}
+  {% if job.ingest_batch_id and batch_count > 1 %}
+  <a role="button" class="secondary outline" href="/batches/{{ job.ingest_batch_id }}/edit?next={{ here|urlencode }}">Edit whole batch</a>
+  {% endif %}
+
+  {% if waiting %}
+  {% if position and position > 1 %}
+  <form action="{{ here }}/top" method="post"><input type="hidden" name="next" value="{{ here }}">
+    <button type="submit" class="secondary outline">Run next</button></form>
+  {% endif %}
+  {% if batch_can_jump %}
+  <form action="/batches/{{ job.ingest_batch_id }}/top" method="post"><input type="hidden" name="next" value="{{ here }}">
+    <button type="submit" class="secondary outline">Run this batch next</button></form>
+  {% endif %}
+  <form action="{{ here }}/{{ 'resume' if job.status == 'paused' else 'pause' }}" method="post">
+    <input type="hidden" name="next" value="{{ here }}">
+    <button type="submit" class="secondary outline">{{ 'Resume' if job.status == 'paused' else 'Pause' }}</button></form>
+  <form action="{{ here }}/cancel" method="post" data-confirm="Cancel job {{ job.id }}? It won't be encoded (you can retry it later).">
+    <input type="hidden" name="next" value="{{ here }}">
+    <button type="submit" class="secondary outline danger">Cancel job</button></form>
+  {% endif %}
+
+  {% if job.status in ('failed', 'cancelled', 'interrupted') %}
+  <form action="{{ here }}/retry" method="post"><input type="hidden" name="next" value="{{ here }}">
+    <button type="submit">Retry</button></form>
+  {% elif job.status == 'done' and job.move_state != 'moving' %}
+  <form action="{{ here }}/retry" method="post" data-confirm="Encode job {{ job.id }} again? The new encode replaces the current file.">
+    <input type="hidden" name="next" value="{{ here }}">
+    <button type="submit" class="secondary outline">Re-encode</button></form>
+  {% endif %}
+  {% if job.status == 'done' and job.final_path and job.move_state not in ('moved', 'pending', 'moving') %}
+  <form action="{{ here }}/move" method="post"><input type="hidden" name="next" value="{{ here }}">
+    <button type="submit">Retry move</button></form>
+  {% endif %}
+</div>
+
+{# ── Files ── #}
+<section>
+  <h2 class="section-title">Files</h2>
+  <dl class="facts">
+    <dt>Source</dt><dd class="path">{{ job.source_path }}</dd>
+    <dt>Encode</dt><dd class="path">{{ job.output_path }}</dd>
+    <dt>Library</dt>
+    <dd>
+      {% if job.final_path %}
+      <span class="path">{{ job.final_path }}</span>
+      <small class="muted">
+        {%- if job.move_state == 'moved' %} · moved ✓
+        {%- elif job.move_state in ('pending', 'moving') %} · moving…
+        {%- elif job.move_state == 'failed' %} · move failed
+        {%- else %} · moves when encoded{% endif -%}
+      </small>
+      {% else %}<span class="muted">Not moved (stays in staging)</span>{% endif %}
+    </dd>
+  </dl>
+</section>
+
+{# ── Settings ── #}
+<section>
+  <h2 class="section-title">Settings</h2>
+  {% if target.probe_error %}
+  <p class="flash flash-warn">{{ target.probe_error }}. Showing the saved settings only.</p>
+  {% endif %}
+  <dl class="facts">
+    <dt>Video</dt>
+    <dd>
+      {{ target.args.encoder }} · RF {{ target.args.quality }} · {{ target.args.preset }}
+      {%- if target.args.tune %} · tune {{ target.args.tune }}{% endif %}
+      {%- if target.args.detelecine %} · detelecine{% endif %}
+      {%- if target.args.decomb %} · decomb{% endif %}
+      {%- if target.args.chapter_start is not none %} · chapters {{ target.args.chapter_start }}–{{ target.args.chapter_end }}{% endif %}
+    </dd>
+    <dt>Audio</dt>
+    <dd>
+      <ul class="tracks">
+        {% for row in audio %}
+        <li class="{{ '' if row.include else 'muted' }}">
+          {% if row.include %}
+          <strong>{{ row.codec }}{% if row.codec != 'copy' %} {{ row.bitrate }}k{% endif %}</strong> ← {{ row.label }}
+          {% else %}<span>not kept: {{ row.label }}</span>{% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+    </dd>
+    <dt>Subtitles</dt>
+    <dd>
+      {% if subtitles %}
+      <ul class="tracks">
+        {% for row in subtitles %}
+        <li class="{{ '' if row.include else 'muted' }}">
+          {% if row.include %}<strong>kept{% if row.default %}, default{% endif %}</strong> ← {{ row.label }}
+          {% else %}not kept: {{ row.label }}{% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}<span class="muted">None in the source</span>{% endif %}
+    </dd>
+  </dl>
+  <details class="command">
+    <summary>HandBrake command</summary>
+    {% if command %}<pre><code>{{ command }}</code></pre>
+    {% else %}<p class="bad">Can't build the command: {{ command_error }}</p>{% endif %}
+  </details>
+</section>
+
+{# ── History ── #}
+<section>
+  <h2 class="section-title">History</h2>
+  <dl class="facts">
+    <dt>Queued</dt><dd><time class="js-utc-time" data-utc="{{ job.created_at }}">{{ job.created_at }}</time></dd>
+    {% if job.started_at %}<dt>Started</dt><dd><time class="js-utc-time" data-utc="{{ job.started_at }}">{{ job.started_at }}</time></dd>{% endif %}
+    {% if job.finished_at %}<dt>Finished</dt><dd><time class="js-utc-time" data-utc="{{ job.finished_at }}">{{ job.finished_at }}</time></dd>{% endif %}
+    <dt>Attempts</dt><dd>{{ job.attempt_count }}{% if job.exit_code is not none %} · last exit code {{ job.exit_code }}{% endif %}</dd>
+  </dl>
+</section>
+{% endblock %}

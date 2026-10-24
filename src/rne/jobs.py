@@ -386,3 +386,70 @@ def apply_edits(conn: sqlite3.Connection, results: list[EditResult]) -> tuple[li
             lines.append(f"Job {r.job_id} no longer exists; not changed.")
             ok = False
     return lines, ok
+
+
+# ---------------------------------------------------------------------------
+# Queue order
+#
+# The worker claims by (priority, id). New jobs get priority 0, so they run in
+# the order they were queued. Reordering gives the waiting jobs priorities
+# -N..-1: they keep the order chosen, and anything queued later still goes to
+# the end.
+# ---------------------------------------------------------------------------
+
+_WAITING = (JobStatus.QUEUED.value, JobStatus.PAUSED.value)
+
+
+def waiting_job_ids(conn: sqlite3.Connection) -> list[int]:
+    """Queued and paused jobs, in the order the worker will run them."""
+    rows = conn.execute(
+        "SELECT id FROM jobs WHERE status IN (?, ?) ORDER BY priority, id", _WAITING
+    ).fetchall()
+    return [r["id"] for r in rows]
+
+
+def reorder(conn: sqlite3.Connection, job_ids: list[int]) -> list[int]:
+    """Run the waiting jobs in this order. Returns the new order.
+
+    Ids that are not waiting (started, finished, unknown) are ignored. Waiting
+    jobs the list leaves out (queued since the page was drawn) go after the
+    listed ones, in their current order.
+    """
+    conn.commit()  # BEGIN IMMEDIATE can't start inside an open transaction
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        waiting = waiting_job_ids(conn)
+        listed = set(waiting)
+        order: list[int] = []
+        for job_id in [*job_ids, *waiting]:
+            if job_id in listed:
+                order.append(job_id)
+                listed.discard(job_id)
+        n = len(order)
+        conn.executemany(
+            "UPDATE jobs SET priority = ? WHERE id = ?",
+            [(pos - n, job_id) for pos, job_id in enumerate(order)],
+        )
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    return order
+
+
+def move_to_top(conn: sqlite3.Connection, job_ids: list[int]) -> list[int]:
+    """Run these waiting jobs next, in the order given; the rest keep theirs."""
+    return reorder(conn, list(job_ids))
+
+
+def batch_waiting_ids(conn: sqlite3.Connection, batch_id: int) -> list[int]:
+    """A batch's waiting jobs in episode order (for "move batch to top")."""
+    rows = conn.execute(
+        """
+        SELECT id FROM jobs
+        WHERE  ingest_batch_id = ? AND status IN (?, ?)
+        ORDER BY season, episode, id
+        """,
+        (batch_id, *_WAITING),
+    ).fetchall()
+    return [r["id"] for r in rows]
