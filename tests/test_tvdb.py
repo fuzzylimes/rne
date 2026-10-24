@@ -202,7 +202,7 @@ def test_unreachable(monkeypatch):
 
 
 def test_migration_2(conn):
-    assert db.schema_version(conn) == 2
+    assert db.schema_version(conn) >= 2
     cols = {r[1] for r in conn.execute("PRAGMA table_info(jobs)")}
     assert {"year", "tvdb_id"} <= cols
     assert conn.execute("SELECT COUNT(*) FROM tvdb_cache").fetchone()[0] == 0

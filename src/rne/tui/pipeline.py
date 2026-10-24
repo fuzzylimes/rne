@@ -778,9 +778,14 @@ class ReviewScreen(StepScreen):
         Binding("x", "skip", "Skip / include"),
         Binding("m", "skip_mismatched", "Skip mismatched"),
         Binding("n", "naming", "Naming"),
+        Binding("l", "toggle_move", "Move to library"),
         Binding("escape", "back", "Back"),
     ]
-    DEFAULT_CSS = "ReviewScreen #notes { margin-top: 1; }"
+    DEFAULT_CSS = """
+    ReviewScreen #notes { margin-top: 1; }
+    ReviewScreen #library { width: 1fr; }
+    ReviewScreen #library-row.hidden { display: none; }
+    """
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -788,6 +793,14 @@ class ReviewScreen(StepScreen):
             yield Plain("", id="summary", classes="section")
             yield DataTable(cursor_type="row", zebra_stripes=True, id="jobs")
             yield Plain("", id="notes", classes="warn")
+            yield Plain("Library", classes="section")
+            yield Checkbox("Move to the library when encoded (l)", self.draft.moving,
+                           id="move", compact=True)
+            with Horizontal(classes="field", id="library-row"):
+                yield Label("Library folder")
+                yield Input(str(self.draft.library_dir or ""), id="library", compact=True,
+                            placeholder="/path/to/Shows/Show (Year)")
+            yield Plain("", id="library-note", classes="muted")
             yield Plain("", id="errors")
             with Horizontal(id="buttons"):
                 yield Button("Back  esc", id="back", compact=True)
@@ -829,6 +842,15 @@ class ReviewScreen(StepScreen):
         count = sum(1 for j in plan_ if not j["skipped"])
         self.query_one("#summary", Static).update(
             f"{count} job(s) to queue → {d.staging_dir}")
+        self.query_one("#library-row").set_class(not d.moving, "hidden")
+        if d.moving and d.library_dir is not None:
+            note = (f"Encodes move to {d.library_dir}/ when done; "
+                    "raw rips stay in staging.")
+        elif d.moving:
+            note = "No [library] root for this kind in the config: type a folder."
+        else:
+            note = "Encodes stay in staging."
+        self.query_one("#library-note", Static).update(note)
         self.query_one("#notes", Static).update("\n".join(d.mismatch_details(plan_)))
         errors = d.blocking_errors()
         self.query_one("#errors", Static).update(
@@ -866,6 +888,26 @@ class ReviewScreen(StepScreen):
 
     def action_naming(self) -> None:
         self.flow.goto("naming")
+
+    def action_toggle_move(self) -> None:
+        box = self.query_one("#move", Checkbox)
+        box.value = not box.value
+
+    @on(Checkbox.Changed, "#move")
+    def _move_changed(self, event: Checkbox.Changed) -> None:
+        self.draft.move = event.value
+        self._refresh()
+
+    @on(Input.Changed, "#library")
+    def _library_changed(self, event: Input.Changed) -> None:
+        d = self.draft
+        d.library_override = None  # back to the default to compare against it
+        text = event.value.strip()
+        if text and pathlib.Path(text).expanduser() != d.library_dir:
+            d.library_override = pathlib.Path(text).expanduser()
+        elif not text:
+            d.library_override = pathlib.Path("")  # flagged as "not absolute"
+        self._refresh()
 
     @on(Button.Pressed, "#back")
     def action_back(self) -> None:
@@ -1025,6 +1067,8 @@ class PipelineApp(App[tuple[list[str], bool]]):
                 "WHERE id = ?", (label, show, movie, n.year, n.tvdb_id, d.batch_id))
         jobs.insert_jobs(self.conn, d.batch_id, to_queue)
         lines = [f"Queued {len(to_queue)} job(s) (batch {d.batch_id})."]
+        if d.moving and d.library_dir is not None:
+            lines.append(f"Encodes will be moved to {d.library_dir}/ when done.")
         if d.mode == "queue":
             lines.append("Source files left in place — do not move or delete them "
                          "until encoding completes.")

@@ -39,6 +39,27 @@ def movie_output_path(
     return movie_dir / f"{movie}{suffix}.mkv"
 
 
+def library_path(
+    library_dir: pathlib.Path, output_path: str | pathlib.Path, *, is_tv: bool
+) -> pathlib.Path:
+    """Where an encode lands in the library, mirroring its staging layout.
+
+    library_dir is the show/movie folder in the library, e.g.
+    /mnt/media/Shows/Show (2025). TV keeps the "Season NN/file" part, a movie
+    just its file name.
+    """
+    out = pathlib.Path(output_path)
+    if is_tv:
+        return library_dir / out.parent.name / out.name
+    return library_dir / out.name
+
+
+def library_dir_of(final_path: str | pathlib.Path, *, is_tv: bool) -> pathlib.Path:
+    """Inverse of library_path: the show/movie folder a final path lives in."""
+    final = pathlib.Path(final_path)
+    return final.parent.parent if is_tv else final.parent
+
+
 def renamed_output(
     old_output: str | pathlib.Path,
     *,

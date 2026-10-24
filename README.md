@@ -332,6 +332,8 @@ rne resume             # resume
 
 rne cancel <id>        # remove a queued job (terminal, CLI only)
 rne retry <id>         # re-queue any terminal-state job
+rne move <id>          # move a finished encode into the library (or retry a failed move)
+rne move <id> --to "/mnt/media/Anime/Show (2025)"   # ...somewhere specific
 rne edit               # pick a job from a list, then edit it
 rne edit <id>          # edit one job: name, season/episode, tracks, encode settings
 rne edit --batch <n>   # edit every job from one disc at once (e.g. fix the first episode)
@@ -380,7 +382,24 @@ Two things come from `~/.config/rne/config.toml`: output locations, chosen per i
     The Silence of the Lambs.mkv    ← encoded
 ```
 
-Raw files are kept in `_raw/batch-{id}/` under the show/movie staging directory, using MakeMKV's `title_tNN.mkv` names. After verifying the encode, move files to your library manually — rne does not manage the library.
+Raw files are kept in `_raw/batch-{id}/` under the show/movie staging directory, using MakeMKV's `title_tNN.mkv` names.
+
+### Moving encodes into the library
+
+Tell rne where your library lives:
+
+```toml
+[library]
+tv_root     = "/mnt/media/Shows"
+movies_root = "/mnt/media/Movies"
+```
+
+The Review step then defaults to "Move to the library when encoded" with the
+folder filled in (e.g. `/mnt/media/Shows/Breaking Bad (2008)`). You can change
+the folder, or press `l` to switch the move off. When an encode finishes, the
+worker moves it there (TV into `Season NN/`), on a separate thread so the next
+encode starts right away. Raw rips stay in staging. A failed move shows in `rne ls` and
+the dashboard; fix the cause and run `rne move <id>` or press **Retry move**.
 
 ## Reliability
 

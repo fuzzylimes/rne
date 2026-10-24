@@ -99,7 +99,7 @@ class DiskConfig:
 
 _EMPTY_DISK_CONFIG = DiskConfig(default_disk=None, disks={})
 
-_TOP_LEVEL_KEYS = frozenset({"default_disk", "disks", "notifications", "tvdb"})
+_TOP_LEVEL_KEYS = frozenset({"default_disk", "disks", "notifications", "tvdb", "library"})
 _DISK_KEYS = frozenset({"media_root", "staging_root"})
 
 
@@ -391,6 +391,50 @@ def load_notify_config(path: str | Path | None = None) -> NotifyConfig:
         return _parse_mqtt(raw_notify["mqtt"])
     except ConfigError as exc:
         raise ConfigError(f"{config_file}: {exc}") from None
+
+
+# ---------------------------------------------------------------------------
+# Library
+#
+# Optional [library] table: where finished encodes are moved. Each root is
+# optional; a kind without one is simply not offered the move by default.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class LibraryConfig:
+    tv_root: Path | None = None
+    movies_root: Path | None = None
+
+    def root_for(self, is_tv: bool) -> Path | None:
+        return self.tv_root if is_tv else self.movies_root
+
+
+_LIBRARY_KEYS = frozenset({"tv_root", "movies_root"})
+
+
+def load_library_config(path: str | Path | None = None) -> LibraryConfig:
+    """Load [library]. Missing file/table: no roots. Malformed: ConfigError."""
+    config_file = Path(path) if path is not None else Path(CONFIG_PATH)
+    data = _read_toml(config_file)
+    if data is None or "library" not in data:
+        return LibraryConfig()
+    raw = data["library"]
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{config_file}: 'library' must be a table")
+    unknown = sorted(set(raw) - _LIBRARY_KEYS)
+    if unknown:
+        raise ConfigError(f"{config_file}: [library]: unknown key(s): {', '.join(unknown)}")
+    roots: dict[str, Path] = {}
+    for key in _LIBRARY_KEYS & set(raw):
+        value = raw[key]
+        if not isinstance(value, str) or not value.strip():
+            raise ConfigError(f"{config_file}: [library]: {key} must be a non-empty string")
+        root = Path(value).expanduser()
+        if not root.is_absolute():
+            raise ConfigError(f"{config_file}: [library]: {key} must be an absolute path")
+        roots[key] = root
+    return LibraryConfig(**roots)
 
 
 # ---------------------------------------------------------------------------

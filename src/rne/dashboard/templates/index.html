@@ -127,10 +127,22 @@
             <button type="submit" style="padding:.2rem .5rem;">Retry</button>
           </form>
           {% endif %}
-          {% if job.status == 'done' %}
+          {% if job.status == 'done' and job.move_state != 'moving' %}
           <form class="inline" action="/jobs/{{ job.id }}/retry" method="post">
             <button type="submit" style="padding:.2rem .5rem;" class="secondary">Re-encode</button>
           </form>
+          {% endif %}
+          {% if job.status == 'done' and job.final_path %}
+            {% if job.move_state == 'moved' %}
+            <small title="{{ job.final_path }}" style="margin-left:.4rem;">in library ✓</small>
+            {% elif job.move_state in ('pending', 'moving') %}
+            <small title="{{ job.final_path }}" style="margin-left:.4rem;">moving to library…</small>
+            {% else %}
+            <form class="inline" action="/jobs/{{ job.id }}/move" method="post">
+              <button type="submit" style="padding:.2rem .5rem;">Retry move</button>
+            </form>
+            <small style="color:var(--pico-del-color); margin-left:.4rem;">move failed: {{ (job.move_error or '')[:80] }}</small>
+            {% endif %}
           {% endif %}
           {%- if job.error_message %}
           <small style="color:var(--pico-del-color); margin-left:.4rem;">{{ job.error_message[:80] }}</small>

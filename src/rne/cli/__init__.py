@@ -143,6 +143,16 @@ def _build_parser() -> argparse.ArgumentParser:
     retry_p = sub.add_parser("retry", help="Retry a terminal-state job")
     retry_p.add_argument("id", type=int, help="Job ID")
 
+    move_p = sub.add_parser(
+        "move", help="Move a finished encode into the library (or retry a failed move)"
+    )
+    move_p.add_argument("id", type=int, help="Job ID")
+    move_p.add_argument(
+        "--to", metavar="FOLDER",
+        help="Library folder for this show/movie, e.g. '/mnt/media/Shows/Show (2025)' "
+             "(default: the job's destination, or the [library] root)",
+    )
+
     sub.add_parser("pause", help="Pause the global queue")
     sub.add_parser("resume", help="Resume the global queue")
 
@@ -198,6 +208,10 @@ def main() -> None:
         from rne.cli.manage import run_retry
 
         run_retry(args)
+    elif args.command == "move":
+        from rne.cli.manage import run_move
+
+        run_move(args)
     elif args.command == "pause":
         from rne.cli.manage import run_pause
 

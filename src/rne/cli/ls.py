@@ -58,4 +58,13 @@ def run(args) -> None:
         if status in ("failed", "interrupted") and row["error_message"]:
             snippet = row["error_message"][:60].replace("\n", " ")
             err = f"  [{snippet}]"
+        keys = row.keys()
+        if status == "done" and "final_path" in keys and row["final_path"]:
+            move = row["move_state"]
+            if move == "moved":
+                err += "  in library"
+            elif move in ("pending", "moving"):
+                err += "  moving to library"
+            elif move == "failed":
+                err += f"  move failed: {(row['move_error'] or '')[:50]} (rne move {row['id']})"
         print(f"{row['id']:>4}  {label:<42}  {status:<12}{extra}{err}")

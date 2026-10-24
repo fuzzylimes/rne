@@ -128,9 +128,17 @@ class Job:
     exit_code: Optional[int]
     error_message: Optional[str]
     ingest_batch_id: Optional[int]
+    final_path: Optional[str] = None
+    move_state: Optional[str] = None
+    move_error: Optional[str] = None
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> Job:
+        keys = row.keys()
+
+        def optional(name: str):  # columns added by later migrations
+            return row[name] if name in keys else None
+
         return cls(
             id=row["id"],
             source_path=row["source_path"],
@@ -152,6 +160,9 @@ class Job:
             exit_code=row["exit_code"],
             error_message=row["error_message"],
             ingest_batch_id=row["ingest_batch_id"],
+            final_path=optional("final_path"),
+            move_state=optional("move_state"),
+            move_error=optional("move_error"),
         )
 
 

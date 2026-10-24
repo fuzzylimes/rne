@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import pathlib
 import sys
 
-from rne import db
+from rne import db, naming
 
 _TERMINAL = frozenset({"done", "failed", "cancelled", "interrupted"})
 _CANCELLABLE = frozenset({"queued", "paused"})
@@ -37,9 +38,16 @@ def run_cancel(args) -> None:
 
 def run_retry(args) -> None:
     conn = db.connect()
-    row = conn.execute("SELECT status FROM jobs WHERE id = ?", (args.id,)).fetchone()
+    db.init_db(conn)
+    row = conn.execute(
+        "SELECT status, move_state FROM jobs WHERE id = ?", (args.id,)
+    ).fetchone()
     if row is None:
         print(f"Job {args.id} not found.", file=sys.stderr)
+        sys.exit(1)
+    if row["move_state"] == "moving":
+        print(f"Job {args.id} is being moved to the library; retry once that finishes.",
+              file=sys.stderr)
         sys.exit(1)
     if row["status"] not in _TERMINAL:
         print(
@@ -59,12 +67,56 @@ def run_retry(args) -> None:
                exit_code     = NULL,
                started_at    = NULL,
                finished_at   = NULL
-        WHERE  id = ?
+        WHERE  id = ? AND (move_state IS NULL OR move_state != 'moving')
         """,
         (args.id,),
     )
     conn.commit()
     print(f"Job {args.id} requeued.")
+
+
+def run_move(args) -> None:
+    """Queue a library move for a done job: retry a failed one, or move one now."""
+    conn = db.connect()
+    db.init_db(conn)
+    row = conn.execute("SELECT * FROM jobs WHERE id = ?", (args.id,)).fetchone()
+    if row is None:
+        print(f"Job {args.id} not found.", file=sys.stderr)
+        sys.exit(1)
+    if row["status"] != "done":
+        print(f"Job {args.id} is '{row['status']}'; only finished (done) jobs can be moved. "
+              "To choose where a queued job goes, use `rne edit`.", file=sys.stderr)
+        sys.exit(1)
+    if row["move_state"] == "moving":
+        print(f"Job {args.id} is already being moved.", file=sys.stderr)
+        sys.exit(1)
+
+    is_tv = row["show"] is not None
+    final: pathlib.Path | None = None
+    if args.to:
+        folder = pathlib.Path(args.to).expanduser()
+        if not folder.is_absolute():
+            print("--to needs an absolute path.", file=sys.stderr)
+            sys.exit(2)
+        final = naming.library_path(folder, row["output_path"], is_tv=is_tv)
+    elif row["final_path"] is None:
+        from rne.cli.ingest import library_or_exit
+
+        root = library_or_exit().root_for(is_tv)
+        if root is None:
+            kind = "tv_root" if is_tv else "movies_root"
+            print(f"Job {args.id} has no destination. Pass --to FOLDER, or set "
+                  f"[library] {kind} in the config.", file=sys.stderr)
+            sys.exit(1)
+        title = naming.folder_name(row["show"] or row["movie"], row["year"])
+        final = naming.library_path(root / title, row["output_path"], is_tv=is_tv)
+
+    if not db.request_move(conn, args.id, str(final) if final else None):
+        print(f"Job {args.id} could not be queued for a move.", file=sys.stderr)
+        sys.exit(1)
+    target = final or row["final_path"]
+    print(f"Job {args.id}: move to {target} queued. The worker does it within a few "
+          "seconds (it has to be running); `rne ls` shows the result.")
 
 
 def run_pause(_args) -> None:

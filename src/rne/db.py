@@ -127,6 +127,16 @@ MIGRATIONS: list[tuple[str, ...]] = [
                fetched_at  REAL NOT NULL
            )""",
     ),
+    # 3 (v0.6): move the finished encode into the library. final_path NULL
+    # means "leave it in staging". move_state: NULL (nothing to do yet),
+    # pending, moving, moved, failed.
+    (
+        "ALTER TABLE jobs ADD COLUMN final_path TEXT",
+        "ALTER TABLE jobs ADD COLUMN move_state TEXT "
+        "CHECK (move_state IN ('pending','moving','moved','failed'))",
+        "ALTER TABLE jobs ADD COLUMN move_error TEXT",
+        "CREATE INDEX idx_jobs_move ON jobs(move_state) WHERE move_state IN ('pending','moving')",
+    ),
 ]
 
 
@@ -180,7 +190,9 @@ def claim_next_job(conn: sqlite3.Connection) -> "Job | None":
                progress_fps  = NULL,
                progress_eta  = NULL,
                exit_code     = NULL,
-               error_message = NULL
+               error_message = NULL,
+               move_state    = NULL,
+               move_error    = NULL
         WHERE  id = (
             SELECT id FROM jobs
             WHERE  status = 'queued'
@@ -230,7 +242,10 @@ def mark_done(conn: sqlite3.Connection, job_id: int) -> None:
         """
         UPDATE jobs
         SET status = 'done', finished_at = CURRENT_TIMESTAMP,
-            progress_pct = 100.0, progress_fps = NULL, progress_eta = NULL
+            progress_pct = 100.0, progress_fps = NULL, progress_eta = NULL,
+            -- Hand the file to the worker's mover when it has a destination.
+            move_state = CASE WHEN final_path IS NOT NULL THEN 'pending' END,
+            move_error = NULL
         WHERE id = ?
         """,
         (job_id,),
@@ -254,3 +269,65 @@ def mark_failed(
         (exit_code, error_message, job_id),
     )
     conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Library moves (worker/mover.py does the file work)
+# ---------------------------------------------------------------------------
+
+
+def reconcile_moves(conn: sqlite3.Connection) -> int:
+    """At worker start: a move cut off mid-way ('moving') is simply redone."""
+    cur = conn.execute("UPDATE jobs SET move_state = 'pending' WHERE move_state = 'moving'")
+    conn.commit()
+    return cur.rowcount
+
+
+def claim_next_move(conn: sqlite3.Connection) -> sqlite3.Row | None:
+    """Atomically take the oldest pending move. Returns id, output_path, final_path."""
+    conn.execute("BEGIN IMMEDIATE")
+    row = conn.execute("""
+        UPDATE jobs SET move_state = 'moving', move_error = NULL
+        WHERE  id = (
+            SELECT id FROM jobs
+            WHERE  move_state = 'pending' AND status = 'done' AND final_path IS NOT NULL
+            ORDER BY id LIMIT 1
+        )
+        RETURNING id, output_path, final_path
+    """).fetchone()
+    conn.commit()
+    return row
+
+
+def mark_moved(conn: sqlite3.Connection, job_id: int) -> None:
+    conn.execute(
+        "UPDATE jobs SET move_state = 'moved', move_error = NULL WHERE id = ?", (job_id,)
+    )
+    conn.commit()
+
+
+def mark_move_failed(conn: sqlite3.Connection, job_id: int, error: str) -> None:
+    conn.execute(
+        "UPDATE jobs SET move_state = 'failed', move_error = ? WHERE id = ?",
+        (error[:500], job_id),
+    )
+    conn.commit()
+
+
+def request_move(conn: sqlite3.Connection, job_id: int, final_path: str | None = None) -> bool:
+    """Queue a (re)move of a done job's output. False if it isn't eligible.
+
+    Eligible: status done, a destination (given or already set), and not
+    already being moved. final_path replaces the destination when given.
+    """
+    cur = conn.execute(
+        """
+        UPDATE jobs
+        SET    final_path = COALESCE(?, final_path), move_state = 'pending', move_error = NULL
+        WHERE  id = ? AND status = 'done' AND COALESCE(?, final_path) IS NOT NULL
+          AND  (move_state IS NULL OR move_state IN ('failed', 'moved', 'pending'))
+        """,
+        (final_path, job_id, final_path),
+    )
+    conn.commit()
+    return cur.rowcount == 1

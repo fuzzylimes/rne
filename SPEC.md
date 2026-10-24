@@ -26,7 +26,7 @@ This worked acceptably for DVDs, where rip and encode times were roughly 1:1. Wi
 
 - Multi-user support, authentication, or remote access beyond the LAN.
 - Parallel encoding. One worker, one job at a time.
-- Generic media management (library organization, metadata scraping, etc.). The output goes to a staging directory; the user moves it to the real library themselves.
+- Generic media management (library organization, metadata scraping, etc.). The output goes to a staging directory. *v0.6 change (agreed with the author):* rne can now look a name up on TVDB and, optionally, move each finished encode into a configured library folder (see "TVDB lookup" and "Library moves"). It still does not manage a library beyond placing new files.
 - Mid-encode cancellation. The worker either runs a job to completion or is killed by `systemctl stop`, which marks the job interrupted on the next start.
 
 ## Environment
@@ -148,6 +148,61 @@ Three failure modes, deliberately handled differently:
 Delivery itself never fails the ingest: any broker problem prints one line and
 the prompts continue. See `notify.py` under "Module ownership" for why the MQTT
 client is hand-rolled rather than a dependency.
+
+### Library moves (v0.6)
+
+An optional `[library]` table names where finished encodes go:
+
+```toml
+[library]
+tv_root     = "/mnt/media/Shows"
+movies_root = "/mnt/media/Movies"
+```
+
+Both keys are optional; paths must be absolute. Unknown keys are a
+`ConfigError` (exit 2). If a kind has a root, the Review step of ingest/queue
+defaults "Move to the library when encoded" to on, with the library folder
+`{root}/{Name (Year)}` shown and editable. `l` toggles the move. With no root,
+the move is off by default and can be switched on by typing a folder. The
+choice is stored per job as `final_path`, which mirrors the staging layout under
+the library folder (`naming.library_path`):
+
+- TV: `{library folder}/Season 01/Show - S01E01.mkv`
+- Movie: `{library folder}/Movie (2024).mkv`
+
+`rne edit` shows the same checkbox and folder. Left untouched, each job keeps
+its own destination, and renaming re-points it when the library folder was
+named after the title. Unticking clears `final_path`.
+
+**Who moves files.** Only the worker. A mover thread (`worker/mover.py`) runs
+beside the encode loop, so a slow copy to another disk never delays the next
+encode. `jobs.move_state` tracks it:
+
+    NULL ──(encode done, final_path set)──▶ pending ──▶ moving ──▶ moved
+                                                            └──▶ failed ──(rne move / dashboard)──▶ pending
+
+- `db.mark_done` sets `pending` in the same statement that marks the job
+  done. `claim_next_job` resets `move_state`/`move_error` for a re-encode.
+- The mover claims the oldest pending move atomically (`claim_next_move`),
+  then moves the file with `move_file`. On the same filesystem that is one
+  `os.replace`. Across filesystems it copies to `final.partial`, fsyncs,
+  renames over `final`, then deletes the staging copy. An existing file at
+  `final` is replaced (the same overwrite semantics as retrying a `done` job).
+- Source already gone but destination present (a crash after the rename,
+  before recording it) counts as `moved`. Both gone: `failed`, "encoded file
+  not found".
+- On worker start, `reconcile_moves` turns any `moving` row back into
+  `pending`, so an interrupted copy is simply redone.
+- Raw rips are never touched; only the encoded file moves.
+- `rne move <id> [--to FOLDER]` and the dashboard's **Retry move** button only
+  mark a done job's move `pending` (`db.request_move`). The running worker does
+  the work within a few seconds, so two processes never move the same file.
+  Without `--to`, `rne move` uses the job's destination, or computes one from
+  the `[library]` root.
+- Retrying (re-encoding) a job is refused while its move is `moving`.
+
+`rne ls` and the dashboard's Recent list show "in library", "moving to
+library", or "move failed: …" for done jobs that have a destination.
 
 ### TVDB lookup (v0.6)
 
@@ -294,6 +349,12 @@ CREATE TABLE jobs (
     year              INTEGER,
     tvdb_id           INTEGER,
 
+    -- Added by migration 3 (v0.6). Library move: destination (NULL = stay in
+    -- staging), state (NULL/pending/moving/moved/failed) and last error.
+    final_path        TEXT,
+    move_state        TEXT,
+    move_error        TEXT,
+
     CHECK ((show IS NOT NULL AND movie IS NULL) OR (show IS NULL AND movie IS NOT NULL))
 );
 
@@ -346,6 +407,7 @@ the dashboard (at startup), `rne ingest`, `rne queue` and `rne edit` all call
 |---|---|---|
 | 1 | v0.6 | `jobs.source_probe` |
 | 2 | v0.6 | `jobs.year`, `jobs.tvdb_id`, `ingest_batches.year`, `ingest_batches.tvdb_id`, table `tvdb_cache(key, body, fetched_at)` |
+| 3 | v0.6 | `jobs.final_path`, `jobs.move_state`, `jobs.move_error`, index `idx_jobs_move` |
 
 ### Source probe snapshot
 
@@ -577,7 +639,8 @@ rne/
     │   ├── __init__.py
     │   ├── daemon.py        # main loop
     │   ├── runner.py        # subprocess.Popen of HandBrakeCLI
-    │   └── heartbeat.py     # periodic worker_status update
+    │   ├── heartbeat.py     # periodic worker_status update
+    │   └── mover.py         # moves finished encodes into the library
     └── dashboard/
         ├── __init__.py
         ├── app.py           # Flask factory + main()
@@ -605,6 +668,7 @@ rne/
 - **`worker/runner.py`** — `subprocess.Popen` of HandBrake, parses progress, captures stderr ring buffer, handles `.partial` rename.
 - **`worker/daemon.py`** — main loop. Reconcile orphans → loop forever: check pause, claim, run, repeat.
 - **`worker/heartbeat.py`** — daemon thread. Updates `worker_status.last_seen` every 10s.
+- **`worker/mover.py`** — daemon thread with its own connection; does pending library moves (see "Library moves").
 - **`dashboard/app.py`** — Flask factory and `main()` (binds `0.0.0.0:8500`).
 - **`dashboard/routes.py`** — six handlers, each ~5 lines. POST handlers return `redirect('/', 303)` (PRG pattern).
 
@@ -667,7 +731,7 @@ Raw files from disc ingest are isolated per batch to prevent cross-batch clobber
 
 Raw filenames are whatever makemkv produces from the disc's TINFO fields — they can be anything (`B1_t00.mkv`, `00038.mkv`, `D1_00.mkv`, etc.). **rne never constructs or predicts raw filenames.** The only assumption is that exactly one new `*.mkv` file appears in the batch raw dir per rip; the ingest CLI snapshots the dir before and after each rip to detect the new file.
 
-Raw files live inside a `_raw/batch-{ingest_batch_id}/` subdir. Encoded files for TV go in a `Season NN/` subdir alongside `_raw/`; for movies they sit at the show root alongside `_raw/`. After verifying, the user moves the encoded files to the real library themselves; this tool does not manage the library.
+Raw files live inside a `_raw/batch-{ingest_batch_id}/` subdir. Encoded files for TV go in a `Season NN/` subdir alongside `_raw/`; for movies they sit at the show root alongside `_raw/`. Without a library destination the user moves encoded files to the library themselves. With one (v0.6, "Library moves"), the worker moves each encode there when it finishes, and the raws stay in staging.
 
 Output filename templates:
 
@@ -955,6 +1019,7 @@ CLI exits. The worker (running independently under systemd) claims the first job
   2. **Conforms to `HandbrakeArgs` schema** — the top-level object contains only the known fields (`encoder`, `quality`, `preset`, `audio_tracks`, `subtitle_tracks`, `detelecine`, `decomb`, `tune`, `extra_args`); unknown keys are rejected.
   3. **`AudioTrack` invariant** — for each entry in `audio_tracks`: `bitrate` is required (positive integer) when `codec != "copy"`, and must be absent when `codec == "copy"`.
   4. **TOCTOU re-check** — after the editor closes and validation passes, the save goes through `jobs.update_job_args`, which writes only if the job is not `running`, in a single statement. If the job moved to `running` while the editor was open, the save is refused with the message `"job is now running; cannot edit"` and a non-zero exit. This guards against the race where the worker claims a queued job while the user is editing it.
+- **`rne move <id> [--to FOLDER]`** (v0.6) — queue a library move for a done job: retry a failed move, or move one that had no destination. See "Library moves".
 - **`rne cancel <id>`** — terminal removal of a queued job. Sets status to `cancelled`. CLI only — not exposed in the dashboard.
 - **`rne retry <id>`** — resets any terminal-state job back to `queued`. Bumps `attempt_count`, clears progress and error fields.
 - **`rne pause`** / **`rne resume`** — toggle the global `queue_settings.paused` flag. The worker checks this between jobs.

@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 
 from rne import naming as names
 from rne import plan, probe
+from rne.config import LibraryConfig
 from rne.cli._pipeline import _build_disc_split_jobs, _describe_mismatch, mungefilename
 from rne.cli.disc_split import Episode
 from rne.models import HandbrakeArgs
@@ -75,6 +76,9 @@ class Draft:
     chapters: list[probe.Chapter] | None = None  # disc split only
     episodes: list[Episode] | None = None  # disc split only
     batch_id: int | None = None
+    library: LibraryConfig = field(default_factory=LibraryConfig)
+    move: bool | None = None  # None: move if the library has a root for this kind
+    library_override: pathlib.Path | None = None  # "move it somewhere else"
 
     # -- derived ---------------------------------------------------------------
 
@@ -82,6 +86,21 @@ class Draft:
     def staging_dir(self) -> pathlib.Path:
         """The show/movie folder outputs (and ingest raws) go under."""
         return self.staging_override or self.staging_root / self.naming.folder
+
+    @property
+    def library_dir(self) -> pathlib.Path | None:
+        """The show/movie folder in the library, e.g. /mnt/media/Shows/Show (2025)."""
+        if self.library_override is not None:
+            return self.library_override
+        root = self.library.root_for(self.naming.is_tv)
+        return root / self.naming.folder if root else None
+
+    @property
+    def moving(self) -> bool:
+        """Whether encodes will be moved to the library when done."""
+        if self.move is None:
+            return self.library.root_for(self.naming.is_tv) is not None
+        return self.move
 
     @property
     def reference(self) -> Source | None:
@@ -182,6 +201,11 @@ class Draft:
             job["errors"] = (
                 plan.validate(job["handbrake_args"], summary) if summary is not None else []
             )
+            library_dir = self.library_dir if self.moving else None
+            job["final_path"] = (
+                str(names.library_path(library_dir, job["output_path"], is_tv=self.naming.is_tv))
+                if library_dir is not None else None
+            )
             if summary is None and path in self.probe_errors:
                 job["errors"].append(f"could not probe: {self.probe_errors[path]}")
         outputs = [j["output_path"] for j in jobs if not j["skipped"]]
@@ -204,6 +228,12 @@ class Draft:
         return [j for j in self.build_plan() if not j["skipped"]]
 
     def blocking_errors(self) -> list[str]:
-        return [
+        errors = [
             f"{j['label']}: {e}" for j in self.build_plan() if not j["skipped"] for e in j["errors"]
         ]
+        if self.moving:
+            if self.library_dir is None:
+                errors.append("library folder: none set ([library] has no root for this kind)")
+            elif not self.library_dir.is_absolute():
+                errors.append("library folder must be an absolute path")
+        return errors

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pathlib
 import sqlite3
 
 from textual import on
@@ -9,9 +10,10 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
 from textual.screen import Screen
-from textual.widgets import Button, DataTable, Footer, Header, Input, Label, Static
+from textual.widgets import Button, Checkbox, DataTable, Footer, Header, Input, Label, Static
 
-from rne import jobs
+from rne import jobs, naming
+from rne.config import LibraryConfig
 from rne.models import JobStatus
 from rne.cli._pipeline import mungefilename
 from rne.tui.common import APP_CSS, Plain, cell
@@ -102,14 +104,26 @@ class EditScreen(Screen):
         *FORM_BINDINGS,
     ]
 
-    def __init__(self, targets: list[jobs.EditTarget]) -> None:
+    def __init__(self, targets: list[jobs.EditTarget],
+                 library: LibraryConfig | None = None) -> None:
         super().__init__()
+        self.library = library or LibraryConfig()
         self.targets = targets
         self.first = targets[0]
         self.batch = len(targets) > 1
         # TVDB id to save: KEEP each job's own until the name changes or a match is picked.
         self.tvdb_id: object = jobs.KEEP
         self._matched_title: str | None = None
+        # Library destination: kept per job unless the checkbox or folder changes.
+        first = targets[0]
+        self._initial_move = any(x.final_path for x in targets)
+        if first.final_path:
+            self._initial_library = str(naming.library_dir_of(first.final_path,
+                                                              is_tv=first.is_tv))
+        else:
+            root = self.library.root_for(first.is_tv)
+            self._initial_library = (
+                str(root / naming.folder_name(first.title, first.year)) if root else "")
 
     # -- layout ------------------------------------------------------------------
 
@@ -136,6 +150,16 @@ class EditScreen(Screen):
                     yield Label("First episode" if self.batch else "Episode")
                     yield Input(str(first_ep), type="integer", id="episode", classes="number", compact=True)
             yield Plain("", id="outputs")
+            yield Plain("Library", classes="section")
+            yield Checkbox("Move to the library when encoded", self._initial_move,
+                           id="move", compact=True)
+            with Horizontal(classes="field", id="library-row"):
+                yield Label("Library folder")
+                yield Input(self._initial_library, id="library", compact=True,
+                            placeholder="/path/to/Shows/Show (Year)")
+            if t.move_state == "moved" and not self.batch:
+                yield Plain("Already moved to the library; changes here don't move it again.",
+                            classes="muted")
 
             problems = [x for x in self.targets if x.summary is None]
             if problems:
@@ -247,20 +271,40 @@ class EditScreen(Screen):
             return [], errors
         results = jobs.plan_edits(
             self.targets, template=template, title=title, season=season, first_episode=episode,
-            year=year, tvdb_id=self.tvdb_id,
+            year=year, tvdb_id=self.tvdb_id, library=self._library_choice(errors),
         )
         for r in results:
             errors += r.errors
         return results, errors
 
+    def _library_choice(self, errors: list[str]) -> object:
+        """KEEP each job's own destination, None (don't move), or one folder for all."""
+        move = self.query_one("#move", Checkbox).value
+        text = self.query_one("#library", Input).value.strip()
+        self.query_one("#library-row").display = move
+        if move == self._initial_move and text == self._initial_library:
+            return jobs.KEEP
+        if not move:
+            return None
+        folder = pathlib.Path(text).expanduser()
+        if not text or not folder.is_absolute():
+            errors.append("library folder must be an absolute path")
+            return jobs.KEEP
+        return folder
+
     def refresh_plan(self) -> None:
         results, errors = self.current_plan()
-        lines = [f"{r.label:<8} → {r.output_path}" for r in results]
+        lines = []
+        for r in results:
+            lines.append(f"{r.label:<8} → {r.output_path}")
+            if r.final_path:
+                lines.append(f"{'':<8} ⇒ {r.final_path}")
         self.query_one("#outputs", Static).update("\n".join(lines))
         self.query_one("#errors", Static).update("\n".join(f"✗ {e}" for e in errors))
         self.query_one("#save", Button).disabled = bool(errors)
 
     @on(Input.Changed)
+    @on(Checkbox.Changed, "#move")
     @on(SettingsForm.Changed)
     def _changed(self) -> None:
         self.refresh_plan()
@@ -296,6 +340,7 @@ class EditApp(App[tuple[list[str], bool]]):
         *,
         lookup: Lookup | None = None,
         lookup_note: str | None = None,
+        library: LibraryConfig | None = None,
     ) -> None:
         super().__init__()
         self.conn = conn
@@ -303,6 +348,7 @@ class EditApp(App[tuple[list[str], bool]]):
         self.picker = job_ids is None
         self.lookup = lookup
         self.lookup_note = lookup_note
+        self.library = library or LibraryConfig()
 
     def on_mount(self) -> None:
         if self.picker:
@@ -328,5 +374,5 @@ class EditApp(App[tuple[list[str], bool]]):
             self.notify("Batch mixes TV and movie jobs; edit them one at a time.",
                         severity="error")
             return
-        self.push_screen(EditScreen(targets))
+        self.push_screen(EditScreen(targets, self.library))
 

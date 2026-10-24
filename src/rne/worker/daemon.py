@@ -5,7 +5,7 @@ import threading
 import time
 
 from rne import db
-from rne.worker import heartbeat
+from rne.worker import heartbeat, mover
 from rne.worker.runner import current_proc, run_job
 
 _shutdown = threading.Event()
@@ -34,9 +34,11 @@ def main() -> None:
     conn = db.connect()
     db.init_db(conn)
     db.reconcile_orphans(conn)
+    db.reconcile_moves(conn)
 
     heartbeat.set_state("idle")
     heartbeat.start_heartbeat_thread()  # opens its own connection
+    mover.start_mover_thread(_shutdown)  # library moves, alongside encoding
 
     while not _shutdown.is_set():
         if _queue_paused(conn):

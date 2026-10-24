@@ -4,6 +4,8 @@ import datetime
 
 from flask import Flask, g, redirect, render_template
 
+from rne import db
+
 TERMINAL_STATUSES = ("done", "failed", "cancelled", "interrupted")
 
 
@@ -134,10 +136,17 @@ def register(app: Flask) -> None:
                    started_at    = NULL,
                    finished_at   = NULL
             WHERE  id = ? AND status IN ('done','failed','cancelled','interrupted')
+              AND  (move_state IS NULL OR move_state != 'moving')
             """,
             (job_id,),
         )
         g.conn.commit()
+        return redirect("/", 303)
+
+    @app.route("/jobs/<int:job_id>/move", methods=["POST"])
+    def job_move(job_id: int):
+        # The worker's mover thread picks it up within a few seconds.
+        db.request_move(g.conn, job_id)
         return redirect("/", 303)
 
     @app.route("/queue/pause", methods=["POST"])

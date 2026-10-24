@@ -115,11 +115,12 @@ def run(args, roots: config.Roots) -> None:
 def run_tui(args, roots: config.Roots) -> None:
     """Full-screen queue: naming → tracks → review. Source files stay put."""
     from rne import probe
-    from rne.cli.ingest import finish, tvdb_lookup_or_exit
+    from rne.cli.ingest import finish, library_or_exit, tvdb_lookup_or_exit
     from rne.tui import flow
     from rne.tui.pipeline import PipelineApp
 
     lookup, lookup_note = tvdb_lookup_or_exit()
+    library = library_or_exit()
     path = pathlib.Path(args.path).expanduser().resolve()
     manifest = _resolve_manifest(path)
     name_hint = mungefilename(path.name if path.is_dir() else path.stem)
@@ -131,6 +132,7 @@ def run_tui(args, roots: config.Roots) -> None:
         staging_root=roots.staging_root,
         is_dvd=args.dvd,
         sources=[flow.Source(p) for p in manifest],
+        library=library,
     )
     app = PipelineApp(
         draft,

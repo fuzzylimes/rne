@@ -160,6 +160,15 @@ def _load_notify_config_or_exit() -> config.NotifyConfig:
         raise SystemExit(2) from None
 
 
+def library_or_exit() -> config.LibraryConfig:
+    """The [library] roots; exits 2 on a malformed table."""
+    try:
+        return config.load_library_config()
+    except config.ConfigError as exc:
+        print(f"Config error: {exc}", file=sys.stderr)
+        raise SystemExit(2) from None
+
+
 def tvdb_lookup_or_exit():
     """TVDB search function (or None) plus why it's off; exits 2 on a bad [tvdb]."""
     from rne import tvdb
@@ -210,6 +219,7 @@ def run_tui(args, roots: config.Roots) -> None:
 
     notify_cfg = _load_notify_config_or_exit()
     lookup, lookup_note = tvdb_lookup_or_exit()
+    library = library_or_exit()
     print("Reading disc ...")
     try:
         disc_info, titles = makemkv.run_info(source=args.source, minlength=args.minlength)
@@ -231,6 +241,7 @@ def run_tui(args, roots: config.Roots) -> None:
             first_episode=args.first_episode,
         ),
         staging_root=roots.staging_root,
+        library=library,
     )
     app = PipelineApp(
         draft,

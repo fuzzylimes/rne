@@ -76,8 +76,8 @@ def insert_jobs(conn: sqlite3.Connection, batch_id: int, jobs_plan: list[dict]) 
             """
             INSERT INTO jobs
               (show, season, episode, movie, source_path, output_path,
-               handbrake_args, ingest_batch_id, source_probe, year, tvdb_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               handbrake_args, ingest_batch_id, source_probe, year, tvdb_id, final_path)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 job["show"],
@@ -91,6 +91,7 @@ def insert_jobs(conn: sqlite3.Connection, batch_id: int, jobs_plan: list[dict]) 
                 snapshot,
                 job.get("year"),
                 job.get("tvdb_id"),
+                job.get("final_path"),
             ),
         )
     conn.commit()
@@ -126,6 +127,7 @@ def update_job(
     output_path: str,
     year: int | None = None,
     tvdb_id: int | None = None,
+    final_path: str | None = None,
 ) -> None:
     """Replace a job's settings and naming together, unless it is running.
 
@@ -136,11 +138,11 @@ def update_job(
         """
         UPDATE jobs
         SET    handbrake_args = ?, show = ?, season = ?, episode = ?, movie = ?,
-               output_path = ?, year = ?, tvdb_id = ?
+               output_path = ?, year = ?, tvdb_id = ?, final_path = ?
         WHERE  id = ? AND status != ?
         """,
         (args.to_json(), show, season, episode, movie, output_path, year, tvdb_id,
-         job_id, JobStatus.RUNNING.value),
+         final_path, job_id, JobStatus.RUNNING.value),
     )
     conn.commit()
     if cur.rowcount != 1:
@@ -204,6 +206,8 @@ class EditTarget:
     probe_error: str | None = None
     year: int | None = None
     tvdb_id: int | None = None
+    final_path: str | None = None
+    move_state: str | None = None
 
     @property
     def label(self) -> str:
@@ -225,6 +229,7 @@ class EditResult:
     errors: list[str] = field(default_factory=list)
     year: int | None = None
     tvdb_id: int | None = None
+    final_path: str | None = None
 
 
 def load_edit_targets(
@@ -262,6 +267,8 @@ def load_edit_targets(
             probe_error=error,
             year=row["year"],
             tvdb_id=row["tvdb_id"],
+            final_path=row["final_path"],
+            move_state=row["move_state"],
         ))
     return targets
 
@@ -296,13 +303,16 @@ def plan_edits(
     first_episode: int | None = None,
     year: int | None | object = KEEP,
     tvdb_id: int | None | object = KEEP,
+    library: pathlib.Path | None | object = KEEP,
 ) -> list[EditResult]:
     """Work out each job's new settings and naming. Pure.
 
     template None keeps every job's settings. For TV, episodes are renumbered
     from first_episode in the targets' current episode order; first_episode
-    None keeps them. year/tvdb_id KEEP leaves each job's own. Each result lists
-    its validation errors.
+    None keeps them. year/tvdb_id KEEP leaves each job's own. library is the
+    show/movie folder in the library for every job, None for "don't move", or
+    KEEP for each job's own destination (its folder renamed along with the
+    title, if it was named after it). Each result lists its validation errors.
     """
     ordered = sorted(targets, key=lambda t: (t.season or 0, t.episode or 0, t.job_id))
     position = {t.job_id: i for i, t in enumerate(ordered)}
@@ -333,11 +343,23 @@ def plan_edits(
             )
             label = naming.folder_name(title, new_year)  # type: ignore[arg-type]
             show, movie = None, title
+        if library is KEEP:
+            final = None
+            if t.final_path:
+                lib_dir = naming.library_dir_of(t.final_path, is_tv=t.is_tv)
+                if lib_dir.name == naming.folder_name(t.title, t.year):
+                    lib_dir = lib_dir.parent / naming.folder_name(title, new_year)  # type: ignore[arg-type]
+                final = str(naming.library_path(lib_dir, output, is_tv=t.is_tv))
+        elif library is None:
+            final = None
+        else:
+            final = str(naming.library_path(library, output, is_tv=t.is_tv))  # type: ignore[arg-type]
         results.append(EditResult(
             job_id=t.job_id, label=label, args=args, show=show, season=new_season,
             episode=new_episode, movie=movie, output_path=str(output),
             errors=[f"{label}: {e}" for e in errors],
             year=new_year, tvdb_id=new_tvdb,  # type: ignore[arg-type]
+            final_path=final,
         ))
     outputs = [r.output_path for r in results]
     for r in results:
@@ -354,7 +376,7 @@ def apply_edits(conn: sqlite3.Connection, results: list[EditResult]) -> tuple[li
             update_job(
                 conn, r.job_id, r.args, show=r.show, season=r.season,
                 episode=r.episode, movie=r.movie, output_path=r.output_path,
-                year=r.year, tvdb_id=r.tvdb_id,
+                year=r.year, tvdb_id=r.tvdb_id, final_path=r.final_path,
             )
             lines.append(f"Job {r.job_id} ({r.label}) updated.")
         except JobRunning:
