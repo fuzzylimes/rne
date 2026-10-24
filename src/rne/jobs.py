@@ -33,16 +33,28 @@ def create_batch_row(
     season: int | None,
     notes: str,
     label_suffix: str = "",
+    year: int | None = None,
+    tvdb_id: int | None = None,
 ) -> int:
     """Insert an ingest_batches row and return its id."""
-    base_label = f"{show} S{season:02d}" if is_tv else str(movie)
-    label = base_label + label_suffix
+    label = batch_label(is_tv=is_tv, show=show, movie=movie, season=season, year=year)
     cur = conn.execute(
-        "INSERT INTO ingest_batches (label, show, movie, notes) VALUES (?, ?, ?, ?)",
-        (label, show, movie, notes),
+        "INSERT INTO ingest_batches (label, show, movie, notes, year, tvdb_id) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (label + label_suffix, show, movie, notes, year, tvdb_id),
     )
     conn.commit()
     return cur.lastrowid
+
+
+def batch_label(
+    *, is_tv: bool, show: str | None, movie: str | None, season: int | None,
+    year: int | None = None,
+) -> str:
+    """'Show (2025) S01' / 'Movie (2024)'."""
+    if is_tv:
+        return f"{naming.folder_name(str(show), year)} S{season:02d}"
+    return naming.folder_name(str(movie), year)
 
 
 def insert_jobs(conn: sqlite3.Connection, batch_id: int, jobs_plan: list[dict]) -> None:
@@ -64,8 +76,8 @@ def insert_jobs(conn: sqlite3.Connection, batch_id: int, jobs_plan: list[dict]) 
             """
             INSERT INTO jobs
               (show, season, episode, movie, source_path, output_path,
-               handbrake_args, ingest_batch_id, source_probe)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+               handbrake_args, ingest_batch_id, source_probe, year, tvdb_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 job["show"],
@@ -77,6 +89,8 @@ def insert_jobs(conn: sqlite3.Connection, batch_id: int, jobs_plan: list[dict]) 
                 hb.to_json(),
                 batch_id,
                 snapshot,
+                job.get("year"),
+                job.get("tvdb_id"),
             ),
         )
     conn.commit()
@@ -110,6 +124,8 @@ def update_job(
     episode: int | None,
     movie: str | None,
     output_path: str,
+    year: int | None = None,
+    tvdb_id: int | None = None,
 ) -> None:
     """Replace a job's settings and naming together, unless it is running.
 
@@ -120,10 +136,10 @@ def update_job(
         """
         UPDATE jobs
         SET    handbrake_args = ?, show = ?, season = ?, episode = ?, movie = ?,
-               output_path = ?
+               output_path = ?, year = ?, tvdb_id = ?
         WHERE  id = ? AND status != ?
         """,
-        (args.to_json(), show, season, episode, movie, output_path,
+        (args.to_json(), show, season, episode, movie, output_path, year, tvdb_id,
          job_id, JobStatus.RUNNING.value),
     )
     conn.commit()
@@ -169,6 +185,8 @@ def load_source_summary(
 # Editing one job or a whole batch
 # ---------------------------------------------------------------------------
 
+KEEP = object()  # plan_edits: leave each job's own value
+
 
 @dataclass
 class EditTarget:
@@ -184,12 +202,14 @@ class EditTarget:
     args: HandbrakeArgs
     summary: probe.StreamSummary | None  # None when the source can't be read
     probe_error: str | None = None
+    year: int | None = None
+    tvdb_id: int | None = None
 
     @property
     def label(self) -> str:
         if self.is_tv:
             return naming.episode_label(self.season, self.episode)  # type: ignore[arg-type]
-        return self.title
+        return naming.folder_name(self.title, self.year)
 
 
 @dataclass
@@ -203,6 +223,8 @@ class EditResult:
     movie: str | None
     output_path: str
     errors: list[str] = field(default_factory=list)
+    year: int | None = None
+    tvdb_id: int | None = None
 
 
 def load_edit_targets(
@@ -238,6 +260,8 @@ def load_edit_targets(
             args=HandbrakeArgs.from_json(row["handbrake_args"]),
             summary=summary,
             probe_error=error,
+            year=row["year"],
+            tvdb_id=row["tvdb_id"],
         ))
     return targets
 
@@ -270,18 +294,23 @@ def plan_edits(
     title: str,
     season: int | None = None,
     first_episode: int | None = None,
+    year: int | None | object = KEEP,
+    tvdb_id: int | None | object = KEEP,
 ) -> list[EditResult]:
     """Work out each job's new settings and naming. Pure.
 
     template None keeps every job's settings. For TV, episodes are renumbered
     from first_episode in the targets' current episode order; first_episode
-    None keeps them. Each result lists its validation errors.
+    None keeps them. year/tvdb_id KEEP leaves each job's own. Each result lists
+    its validation errors.
     """
     ordered = sorted(targets, key=lambda t: (t.season or 0, t.episode or 0, t.job_id))
     position = {t.job_id: i for i, t in enumerate(ordered)}
     results = []
     for t in targets:
         args = t.args if template is None else _settings_for(t.args, template)
+        new_year = t.year if year is KEEP else year
+        new_tvdb = t.tvdb_id if tvdb_id is KEEP else tvdb_id
         errors: list[str] = []
         if t.summary is not None:
             errors += plan.validate(args, t.summary)
@@ -292,21 +321,23 @@ def plan_edits(
             )
             output = naming.renamed_output(
                 t.output_path, is_tv=True, old_title=t.title, new_title=title,
-                season=new_season, episode=new_episode,
+                season=new_season, episode=new_episode, old_year=t.year, new_year=new_year,  # type: ignore[arg-type]
             )
             label = naming.episode_label(new_season, new_episode)  # type: ignore[arg-type]
             show, movie = title, None
         else:
             new_season = new_episode = None
             output = naming.renamed_output(
-                t.output_path, is_tv=False, old_title=t.title, new_title=title
+                t.output_path, is_tv=False, old_title=t.title, new_title=title,
+                old_year=t.year, new_year=new_year,  # type: ignore[arg-type]
             )
-            label = title
+            label = naming.folder_name(title, new_year)  # type: ignore[arg-type]
             show, movie = None, title
         results.append(EditResult(
             job_id=t.job_id, label=label, args=args, show=show, season=new_season,
             episode=new_episode, movie=movie, output_path=str(output),
             errors=[f"{label}: {e}" for e in errors],
+            year=new_year, tvdb_id=new_tvdb,  # type: ignore[arg-type]
         ))
     outputs = [r.output_path for r in results]
     for r in results:
@@ -323,6 +354,7 @@ def apply_edits(conn: sqlite3.Connection, results: list[EditResult]) -> tuple[li
             update_job(
                 conn, r.job_id, r.args, show=r.show, season=r.season,
                 episode=r.episode, movie=r.movie, output_path=r.output_path,
+                year=r.year, tvdb_id=r.tvdb_id,
             )
             lines.append(f"Job {r.job_id} ({r.label}) updated.")
         except JobRunning:

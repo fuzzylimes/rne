@@ -22,8 +22,10 @@ def run(args) -> None:
 
 def run_tui(args) -> None:
     """Full-screen editor: one job, a whole batch, or a picker when neither is given."""
+    from rne.cli.ingest import tvdb_lookup_or_exit
     from rne.tui.edit import EditApp
 
+    lookup, lookup_note = tvdb_lookup_or_exit()
     conn = db.connect()
     db.init_db(conn)
     if args.batch is not None:
@@ -39,7 +41,7 @@ def run_tui(args) -> None:
     else:
         job_ids = None
     # None when the user quits from the picker.
-    lines, ok = EditApp(conn, job_ids).run() or ([], True)
+    lines, ok = EditApp(conn, job_ids, lookup=lookup, lookup_note=lookup_note).run() or ([], True)
     for line in lines:
         print(line)
     if not ok:

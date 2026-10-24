@@ -114,6 +114,19 @@ MIGRATIONS: list[tuple[str, ...]] = [
     # 1 (v0.6): probe snapshot of the source, so editors can list its real
     # tracks without re-running ffprobe. NULL for jobs queued before v0.6.
     ("ALTER TABLE jobs ADD COLUMN source_probe TEXT",),
+    # 2 (v0.6): TVDB match (year goes into folder/file names) and a cache of
+    # TVDB responses, so repeated lookups don't hit the API.
+    (
+        "ALTER TABLE jobs ADD COLUMN year INTEGER",
+        "ALTER TABLE jobs ADD COLUMN tvdb_id INTEGER",
+        "ALTER TABLE ingest_batches ADD COLUMN year INTEGER",
+        "ALTER TABLE ingest_batches ADD COLUMN tvdb_id INTEGER",
+        """CREATE TABLE tvdb_cache (
+               key         TEXT PRIMARY KEY,
+               body        TEXT NOT NULL,
+               fetched_at  REAL NOT NULL
+           )""",
+    ),
 ]
 
 

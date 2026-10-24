@@ -259,13 +259,18 @@ def tv_job(
     show_dir: pathlib.Path,
     source_path: pathlib.Path | str,
     args: HandbrakeArgs,
+    year: int | None = None,
+    tvdb_id: int | None = None,
 ) -> dict:
+    """show_dir is the show's folder, already including any "(year)"."""
     return {
         "label": naming.episode_label(season, episode),
         "show": show,
         "season": season,
         "episode": episode,
         "movie": None,
+        "year": year,
+        "tvdb_id": tvdb_id,
         "source_path": str(source_path),
         "output_path": str(naming.tv_output_path(show_dir, show, season, episode)),
         "handbrake_args": args,
@@ -280,15 +285,21 @@ def movie_job(
     source_path: pathlib.Path | str,
     args: HandbrakeArgs,
     suffix: str = "",
+    year: int | None = None,
+    tvdb_id: int | None = None,
 ) -> dict:
+    """movie_dir is the movie's folder; the file is named like it."""
+    base = naming.folder_name(movie, year)
     return {
-        "label": movie,
+        "label": base,
         "show": None,
         "season": None,
         "episode": None,
         "movie": movie,
+        "year": year,
+        "tvdb_id": tvdb_id,
         "source_path": str(source_path),
-        "output_path": str(naming.movie_output_path(movie_dir, movie, suffix)),
+        "output_path": str(naming.movie_output_path(movie_dir, base, suffix)),
         "handbrake_args": args,
         "layout_warning": False,
     }

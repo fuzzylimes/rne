@@ -160,6 +160,17 @@ def _load_notify_config_or_exit() -> config.NotifyConfig:
         raise SystemExit(2) from None
 
 
+def tvdb_lookup_or_exit():
+    """TVDB search function (or None) plus why it's off; exits 2 on a bad [tvdb]."""
+    from rne import tvdb
+
+    try:
+        return tvdb.lookup_from_config()
+    except config.ConfigError as exc:
+        print(f"Config error: {exc}", file=sys.stderr)
+        raise SystemExit(2) from None
+
+
 def notify_message(cfg: config.NotifyConfig, **values: object) -> str | None:
     """Best-effort 'the disc is done' push. Never raises, never blocks for long.
 
@@ -198,6 +209,7 @@ def run_tui(args, roots: config.Roots) -> None:
     from rne.tui.pipeline import PipelineApp
 
     notify_cfg = _load_notify_config_or_exit()
+    lookup, lookup_note = tvdb_lookup_or_exit()
     print("Reading disc ...")
     try:
         disc_info, titles = makemkv.run_info(source=args.source, minlength=args.minlength)
@@ -234,6 +246,8 @@ def run_tui(args, roots: config.Roots) -> None:
         notifier=lambda **values: notify_message(notify_cfg, **values),
         auto_retries=config.RIP_RETRIES,
         batch_notes=volume_name,
+        lookup=lookup,
+        lookup_note=lookup_note,
     )
     finish(app.run())
 

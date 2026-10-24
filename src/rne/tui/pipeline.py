@@ -37,11 +37,12 @@ from textual.widgets import (
 )
 
 from rne import jobs, makemkv, plan, probe
-from rne.cli._pipeline import _audio_summary, _subtitle_summary
+from rne.cli._pipeline import _audio_summary, _subtitle_summary, mungefilename
 from rne.cli.disc_split import autodetect, fixed_split, groups_to_episodes, parse_ranges
 from rne.models import HandbrakeArgs
-from rne.tui.common import APP_CSS
+from rne.tui.common import APP_CSS, Plain, cell
 from rne.tui.flow import Draft, Source
+from rne.tui.lookup import TYPED, Lookup, LookupModal
 from rne.tui.nav import FORM_BINDINGS, NAV_HINT, NavRadioSet
 from rne.tui.settings import SettingsForm
 
@@ -99,11 +100,11 @@ class TitlesScreen(StepScreen):
     def compose(self) -> ComposeResult:
         yield Header()
         with Vertical(id="body"):
-            yield Static(f"Disc: {self.flow.volume_name}", classes="section")
-            yield Static("Space selects a title, a selects all. Titles rip top to bottom, "
+            yield Plain(f"Disc: {self.flow.volume_name}", classes="section")
+            yield Plain("Space selects a title, a selects all. Titles rip top to bottom, "
                          "and episodes are numbered in that order.", classes="hint")
             yield DataTable(cursor_type="row", zebra_stripes=True, id="titles")
-            yield Static("", id="errors")
+            yield Plain("", id="errors")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -116,8 +117,8 @@ class TitlesScreen(StepScreen):
             row = makemkv.summarize(disc_idx, self.flow.titles[disc_idx])
             mark = "✓" if disc_idx in self.draft.selected_titles else " "
             table.add_row(mark, str(display_idx), str(disc_idx),
-                          *(str(row[c]) for c in ("Source", "Duration", "Size", "Ch",
-                                                  "Resolution", "FPS", "Audio")),
+                          *(cell(row[c]) for c in ("Source", "Duration", "Size", "Ch",
+                                                    "Resolution", "FPS", "Audio")),
                           key=str(disc_idx))
         table.focus()
 
@@ -158,9 +159,11 @@ class NamingScreen(StepScreen):
     STEP = "Naming"
     BINDINGS = [
         Binding("ctrl+n", "next", "Next", priority=True),
+        Binding("ctrl+f", "lookup", "Look up on TVDB"),
         Binding("escape", "back", "Back"),
     ]
     DEFAULT_CSS = """
+    NamingScreen #match { padding-left: 16; }
     NamingScreen NavRadioSet { layout: horizontal; height: auto; width: auto; border: none;
                             padding: 0; }
     NamingScreen NavRadioSet > RadioButton { width: auto; margin-right: 4; }
@@ -173,22 +176,28 @@ class NamingScreen(StepScreen):
         yield Header()
         with VerticalScroll(id="body"):
             if self.draft.mode == "queue":
-                yield Static("Files", classes="section")
-                yield Static("\n".join(f"{i}. {s.path.name}"
+                yield Plain("Files", classes="section")
+                yield Plain("\n".join(f"{i}. {s.path.name}"
                                        for i, s in enumerate(self.draft.sources, 1)),
                              classes="muted")
-            yield Static("What is it?", classes="section")
+            yield Plain("What is it?", classes="section")
             with NavRadioSet(id="kind", disabled=locked):
                 yield RadioButton("TV episodes", value=n.is_tv, id="tv")
                 yield RadioButton("Movie", value=not n.is_tv, id="movie")
             with Horizontal(classes="field"):
                 yield Label("Name")
                 yield Input(n.title, id="title", compact=True)
+            yield Plain("", id="match", classes="muted")
+            with Horizontal(classes="field"):
+                yield Label("Year")
+                yield Input("" if n.year is None else str(n.year), type="integer",
+                            placeholder="optional", id="year", classes="number", compact=True)
+                yield Plain("adds (year) to the folder name", classes="muted")
             with Horizontal(classes="field tv-only"):
                 yield Label("Season")
                 yield Input("" if n.season is None else str(n.season), type="integer",
                             id="season", classes="number", compact=True)
-                yield Static("0 for specials", classes="muted")
+                yield Plain("0 for specials", classes="muted")
             with Horizontal(classes="field tv-only"):
                 yield Label("First episode")
                 yield Input("" if n.first_episode is None else str(n.first_episode),
@@ -197,9 +206,9 @@ class NamingScreen(StepScreen):
                 yield Checkbox("One file holds several episodes (split by chapters)",
                                n.disc_split, id="split", classes="tv-only", compact=True,
                                disabled=locked)
-            yield Static("", id="preview", classes="ok")
-            yield Static("", id="errors")
-            yield Static(NAV_HINT, classes="hint")
+            yield Plain("", id="preview", classes="ok")
+            yield Plain("", id="errors")
+            yield Plain(NAV_HINT, classes="hint")
             with Horizontal(id="buttons"):
                 yield Button("Back  esc", id="back", compact=True,
                              disabled=self._back_target() is None)
@@ -217,6 +226,11 @@ class NamingScreen(StepScreen):
         return len(self.draft.sources)
 
     def on_mount(self) -> None:
+        n = self.draft.naming
+        # The name a TVDB match was made for; editing the name drops the match.
+        self._matched_title: str | None = n.title if n.tvdb_id else None
+        # The name the user last looked up (or chose to keep as typed).
+        self._looked_up: str | None = n.title if n.tvdb_id else None
         self.query_one("#title", Input).focus()
         self._refresh()
 
@@ -224,6 +238,9 @@ class NamingScreen(StepScreen):
         n = self.draft.naming
         n.is_tv = self.query_one("#tv", RadioButton).value
         n.title = self.query_one("#title", Input).value
+        n.year = _int_or_none(self.query_one("#year", Input).value)
+        if n.tvdb_id is not None and n.title != self._matched_title:
+            n.tvdb_id = None
         n.season = _int_or_none(self.query_one("#season", Input).value)
         n.first_episode = _int_or_none(self.query_one("#first", Input).value)
         splits = self.query("#split")
@@ -246,11 +263,26 @@ class NamingScreen(StepScreen):
                 count = None if self.draft.sources else self._file_count()
                 preview = "→ " + self.draft.episode_preview(count)
             else:
-                preview = f"→ {n.clean_title}"
+                preview = f"→ {n.folder}.mkv"
+        if n.clean_title:
             preview += f"\n   in {self.draft.staging_dir}"
         self.query_one("#preview", Static).update(preview)
+        self.query_one("#match", Static).update(self._match_line())
         self.query_one("#errors", Static).update("\n".join(f"✗ {e}" for e in errors))
         self.query_one("#next", Button).disabled = bool(errors)
+
+    def _match_line(self) -> str:
+        n = self.draft.naming
+        if n.tvdb_id is not None:
+            return f"✓ TVDB #{n.tvdb_id}"
+        if self.flow.lookup is None:
+            return f"TVDB lookup off: {self.flow.lookup_note}" if self.flow.lookup_note else ""
+        return "Enter (or ctrl+f) looks the name up on TVDB"
+
+    def check_action(self, action: str, parameters: tuple) -> bool | None:
+        if action == "lookup":
+            return self.flow.lookup is not None
+        return True
 
     @on(Input.Changed)
     @on(RadioSet.Changed)
@@ -258,7 +290,46 @@ class NamingScreen(StepScreen):
     def _changed(self) -> None:
         self._refresh()
 
-    @on(Input.Submitted)
+    @on(Input.Submitted, "#title")
+    def _title_submitted(self) -> None:
+        # First Enter on a new name searches TVDB; the next one moves on.
+        self._read()
+        if self.flow.lookup is not None and self._looked_up != self.draft.naming.title:
+            self.action_lookup()
+        else:
+            self.action_next()
+
+    def action_lookup(self) -> None:
+        self._read()
+        n = self.draft.naming
+        if self.flow.lookup is None or not n.title.strip():
+            return
+        self._looked_up = n.title
+        kind = "series" if n.is_tv else "movie"
+        self.app.push_screen(LookupModal(self.flow.lookup, n.title.strip(), kind),
+                             self._apply_match)
+
+    def _apply_match(self, result) -> None:
+        n = self.draft.naming
+        title = self.query_one("#title", Input)
+        if result is None:
+            title.focus()
+            return
+        if result == TYPED:
+            n.tvdb_id = None
+        else:
+            clean = mungefilename(result.name)
+            self._matched_title = self._looked_up = clean
+            n.tvdb_id = result.tvdb_id
+            title.value = clean
+            self.query_one("#year", Input).value = str(result.year or "")
+        self._refresh()
+        # On to the next thing that needs answering.
+        target = "#season" if n.is_tv and n.season is None else (
+            "#first" if n.is_tv and n.first_episode is None else "#next")
+        self.query_one(target).focus()
+
+    @on(Input.Submitted, "#year, #season, #first")
     @on(Button.Pressed, "#next")
     def action_next(self) -> None:
         self._refresh()
@@ -304,8 +375,8 @@ class RipFailedModal(ModalScreen[str]):
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Static(f"Title {self.title_idx} failed to rip", classes="section")
-            yield Static(self.error)
+            yield Plain(f"Title {self.title_idx} failed to rip", classes="section")
+            yield Plain(self.error)
             with Horizontal():
                 yield Button("Retry (r)", variant="primary", id="retry", compact=True)
                 yield Button("Skip title (s)", id="skip", compact=True)
@@ -333,22 +404,22 @@ class RipScreen(StepScreen):
         d = self.draft
         yield Header()
         with VerticalScroll(id="body"):
-            yield Static(f"{len(d.selected_titles)} title(s) to rip, in this order:",
+            yield Plain(f"{len(d.selected_titles)} title(s) to rip, in this order:",
                          classes="section")
-            yield Static("\n".join(self.flow.title_line(t) for t in d.selected_titles),
+            yield Plain("\n".join(self.flow.title_line(t) for t in d.selected_titles),
                          classes="muted")
             with Horizontal(classes="field"):
                 yield Label("Rip into")
                 yield Input(str(d.staging_dir), id="staging", compact=True)
-            yield Static("", id="raw", classes="muted")
+            yield Plain("", id="raw", classes="muted")
             with Vertical(classes="running-only hidden", id="progress"):
-                yield Static("", id="current")
+                yield Plain("", id="current")
                 yield ProgressBar(total=100, show_eta=False, id="title-bar")
-                yield Static("", id="overall-label")
+                yield Plain("", id="overall-label")
                 yield ProgressBar(total=len(d.selected_titles), show_eta=False,
                                   id="overall-bar")
                 yield Log(id="log", max_lines=500)
-            yield Static("", id="errors")
+            yield Plain("", id="errors")
             with Horizontal(id="buttons"):
                 yield Button("Back  esc", id="back", compact=True)
                 yield Button("Start rip", variant="primary", id="start", compact=True)
@@ -497,11 +568,11 @@ class TracksScreen(StepScreen):
             heading = f"Settings for all jobs (tracks read from {path.name})"
         yield Header()
         with VerticalScroll(id="body"):
-            yield Static(heading, classes="section")
-            yield Static(_video_line(summary), classes="muted")
+            yield Plain(heading, classes="section")
+            yield Plain(_video_line(summary), classes="muted")
             yield SettingsForm(summary, args, is_dvd=d.is_dvd, id="settings")
-            yield Static("", id="errors")
-            yield Static(NAV_HINT, classes="hint")
+            yield Plain("", id="errors")
+            yield Plain(NAV_HINT, classes="hint")
             with Horizontal(id="buttons"):
                 if self.override:
                     yield Button("Cancel  esc", id="back", compact=True)
@@ -575,8 +646,8 @@ class ChaptersScreen(StepScreen):
     def compose(self) -> ComposeResult:
         yield Header()
         with VerticalScroll(id="body"):
-            yield Static("Split one file into episodes", classes="section")
-            yield Static("Short chapters (openings, previews) are folded into the nearest "
+            yield Plain("Split one file into episodes", classes="section")
+            yield Plain("Short chapters (openings, previews) are folded into the nearest "
                          "episode.", classes="hint")
             with Horizontal(id="tables"):
                 yield DataTable(cursor_type="none", id="chapters")
@@ -593,7 +664,7 @@ class ChaptersScreen(StepScreen):
                 yield Label("Ranges")
                 yield Input("", placeholder="e.g. 1-6, 7-12, 13-18", id="ranges", compact=True)
                 yield Button("Use ranges", id="by-ranges", compact=True)
-            yield Static("", id="errors")
+            yield Plain("", id="errors")
             with Horizontal(id="buttons"):
                 yield Button("Back  esc", id="back", compact=True)
                 yield Button("Next  ctrl+n", variant="primary", id="next", compact=True)
@@ -627,7 +698,7 @@ class ChaptersScreen(StepScreen):
         running = 0.0
         for ch in d.chapters:
             running += ch.duration
-            table.add_row(str(ch.number), ch.title, _fmt_seconds(ch.duration),
+            table.add_row(str(ch.number), cell(ch.title), _fmt_seconds(ch.duration),
                           _fmt_seconds(running))
         self._show_episodes()
 
@@ -714,10 +785,10 @@ class ReviewScreen(StepScreen):
     def compose(self) -> ComposeResult:
         yield Header()
         with VerticalScroll(id="body"):
-            yield Static("", id="summary", classes="section")
+            yield Plain("", id="summary", classes="section")
             yield DataTable(cursor_type="row", zebra_stripes=True, id="jobs")
-            yield Static("", id="notes", classes="warn")
-            yield Static("", id="errors")
+            yield Plain("", id="notes", classes="warn")
+            yield Plain("", id="errors")
             with Horizontal(id="buttons"):
                 yield Button("Back  esc", id="back", compact=True)
                 yield Button("Queue  ctrl+s", variant="primary", id="queue", compact=True)
@@ -749,7 +820,7 @@ class ReviewScreen(StepScreen):
             encode = f"crf {hb.quality} {hb.preset}" + (f" {hb.tune}" if hb.tune else "")
             if hb.chapter_start is not None:
                 encode += f" ch {hb.chapter_start}-{hb.chapter_end}"
-            table.add_row(job["label"], pathlib.Path(job["output_path"]).name,
+            table.add_row(cell(job["label"]), cell(pathlib.Path(job["output_path"]).name),
                           _audio_summary(hb.audio_tracks),
                           _subtitle_summary(hb.subtitle_tracks) if hb.subtitle_tracks else "none",
                           encode, ", ".join(notes), key=str(i))
@@ -834,6 +905,8 @@ class PipelineApp(App[tuple[list[str], bool]]):
         notifier: Notifier | None = None,
         auto_retries: int = 0,
         batch_notes: str = "",
+        lookup: Lookup | None = None,
+        lookup_note: str | None = None,
     ) -> None:
         super().__init__()
         self.draft = draft
@@ -847,6 +920,8 @@ class PipelineApp(App[tuple[list[str], bool]]):
         self.notifier = notifier
         self.auto_retries = auto_retries
         self.batch_notes = batch_notes
+        self.lookup = lookup
+        self.lookup_note = lookup_note
         self.ripping = False
         self.ripped = False  # ingest only: the rip has finished
         self.raw_dir: pathlib.Path | None = None
@@ -916,6 +991,7 @@ class PipelineApp(App[tuple[list[str], bool]]):
         d.batch_id = jobs.create_batch_row(
             self.conn, is_tv=n.is_tv, show=n.clean_title if n.is_tv else None,
             movie=None if n.is_tv else n.clean_title, season=n.season, notes=self.batch_notes,
+            year=n.year, tvdb_id=n.tvdb_id,
         )
         self.raw_dir = d.staging_dir / "_raw" / f"batch-{d.batch_id}"
         self.raw_dir.mkdir(parents=True, exist_ok=False)
@@ -939,11 +1015,14 @@ class PipelineApp(App[tuple[list[str], bool]]):
         if d.batch_id is None:  # queue mode creates its batch only now
             d.batch_id = jobs.create_batch_row(self.conn, is_tv=n.is_tv, show=show, movie=movie,
                                                season=n.season, notes=self.batch_notes,
-                                               label_suffix=" (queued)")
+                                               label_suffix=" (queued)", year=n.year,
+                                               tvdb_id=n.tvdb_id)
         else:  # naming may have changed since the rip started
-            label = f"{show} S{n.season:02d}" if n.is_tv else str(movie)
-            self.conn.execute("UPDATE ingest_batches SET label = ?, show = ?, movie = ? "
-                              "WHERE id = ?", (label, show, movie, d.batch_id))
+            label = jobs.batch_label(is_tv=n.is_tv, show=show, movie=movie, season=n.season,
+                                     year=n.year)
+            self.conn.execute(
+                "UPDATE ingest_batches SET label = ?, show = ?, movie = ?, year = ?, tvdb_id = ? "
+                "WHERE id = ?", (label, show, movie, n.year, n.tvdb_id, d.batch_id))
         jobs.insert_jobs(self.conn, d.batch_id, to_queue)
         lines = [f"Queued {len(to_queue)} job(s) (batch {d.batch_id})."]
         if d.mode == "queue":

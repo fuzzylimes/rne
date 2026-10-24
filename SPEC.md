@@ -149,6 +149,51 @@ Delivery itself never fails the ingest: any broker problem prints one line and
 the prompts continue. See `notify.py` under "Module ownership" for why the MQTT
 client is hand-rolled rather than a dependency.
 
+### TVDB lookup (v0.6)
+
+An optional `[tvdb]` table enables a name lookup during naming (the same TVDB
+v4 API and key as the author's jfvnamer tool):
+
+```toml
+[tvdb]
+api_key = "..."            # TVDB v4 key; without it, lookup is off
+language = "eng"           # optional: TVDB language code for names/overviews
+cache_ttl_days = 7         # optional: how long search results are reused
+pin = "..."                # optional: only for user-supported keys
+```
+
+Same rules as the other sections. A missing file or table means lookup is off,
+silently. A table without `api_key` is also off, and the naming screen says
+why. An unknown key, wrong type, empty string or negative TTL is a
+`ConfigError` (exit 2), checked before the disc is read.
+
+`tvdb.py` logs in (`POST /login`, token cached ~25 days) and searches
+(`GET /search?query=&type=series|movie`) with stdlib `urllib`. Responses are
+cached in the `tvdb_cache` table, keyed by kind, language and normalised query,
+so repeated lookups cost nothing. A 401 triggers one re-login. Network and API
+failures become a `TvdbError` with a message fit to show. `parse_search()` is
+pure, and prefers the configured language's translation for the name and
+overview.
+
+In the UI (naming step of ingest/queue, and `rne edit`), Enter on a new name,
+or ctrl+f, opens a results dialog showing name, year, network, country and the
+highlighted show's overview. Enter picks; editing the query and pressing Enter
+searches again; ctrl+t keeps the name as typed; Esc cancels. Picking a result
+sets the name (through `mungefilename`), the **Year** field and the TVDB id.
+Editing the name afterwards drops the id but keeps the visible year. The Year
+field can also be filled by hand, with or without a key.
+
+**Naming with a year** (`naming.folder_name`): the show/movie folder becomes
+`Name (Year)`. TV episode files keep `Show - S01E01.mkv`. Movie files are named
+like their folder:
+
+- TV: `{root}/Show (2025)/Season 01/Show - S01E01.mkv`
+- Movie: `{root}/Movie (2024)/Movie (2024).mkv`
+
+The raw folder sits under the same `Name (Year)` folder. `jobs.year` /
+`jobs.tvdb_id` (and the same on `ingest_batches`) record the choice. Batch labels
+become `Show (2025) S01`. Without a year, every name is exactly as before.
+
 ## Architecture overview
 
 Three independent processes coordinate through a single SQLite database:
@@ -244,6 +289,11 @@ CREATE TABLE jobs (
     -- (StreamSummary + optional chapters); NULL for jobs queued earlier.
     source_probe      TEXT,
 
+    -- Added by migration 2 (v0.6). Year in the folder name, and the TVDB
+    -- match it came from; NULL when not looked up / not given.
+    year              INTEGER,
+    tvdb_id           INTEGER,
+
     CHECK ((show IS NOT NULL AND movie IS NULL) OR (show IS NULL AND movie IS NOT NULL))
 );
 
@@ -295,6 +345,7 @@ the dashboard (at startup), `rne ingest`, `rne queue` and `rne edit` all call
 | Version | Release | Change |
 |---|---|---|
 | 1 | v0.6 | `jobs.source_probe` |
+| 2 | v0.6 | `jobs.year`, `jobs.tvdb_id`, `ingest_batches.year`, `ingest_batches.tvdb_id`, table `tvdb_cache(key, body, fetched_at)` |
 
 ### Source probe snapshot
 
@@ -500,6 +551,7 @@ rne/
     ├── models.py            # Job, AudioTrack, HandbrakeArgs, JobStatus
     ├── plan.py              # encode rules shared by every front end (pure)
     ├── naming.py            # output file/folder names (pure)
+    ├── tvdb.py              # TVDB v4 search + cache
     ├── jobs.py              # batch/job inserts, safe edits, source snapshots
     ├── handbrake.py         # args JSON → command list (pure function)
     ├── probe.py             # ffprobe wrapper, stream summary
@@ -542,7 +594,8 @@ rne/
 - **`models.py`** — dataclasses mirroring the columns, with `from_row(row)` classmethods. `JobStatus` is a `StrEnum`. `HandbrakeArgs` and the nested `AudioTrack` dataclass with `to_json()` / `from_json()`.
 - **`handbrake.py`** — pure. Takes a `HandbrakeArgs` and source path, returns `["HandBrakeCLI", "-i", ...]`. No subprocess, no DB, no I/O. The flatpak prefix from `config.py` is prepended here. Validates `AudioTrack` entries: bitrate required when codec != "copy", rejected when codec == "copy". `source_path` may point outside `/mnt/media/staging/` for jobs created via `rne queue` — this is valid and expected.
 - **`plan.py`** — pure encode rules, the single source of truth for "what are the choices" and "what is the default" for a given `StreamSummary`: DVD/NTSC/interlace detection, default preset, when detelecine/decomb are offered and their defaults (`Toggle`), copy-vs-AC3 audio recommendation, `default_args()` (exactly what pressing Enter at every prompt produces), picker labels and option lists, `validate()` against the source's real tracks, and the `tv_job()`/`movie_job()` job-plan entry builders. The CLI prompts, and later the TUI, dashboard form and API, all call it.
-- **`naming.py`** — pure output-path templates (see "Storage layout").
+- **`naming.py`** — pure output-path templates (see "Storage layout" and "TVDB lookup"), including `folder_name(title, year)` and `renamed_output()` for edits.
+- **`tvdb.py`** — TVDB v4 client (see "TVDB lookup"): pure `parse_search`, `Tvdb.search` with the token and results cached in `tvdb_cache`, and `lookup_from_config()` for the CLIs.
 - **`jobs.py`** — operations front ends perform on jobs: `create_batch_row`, `insert_jobs` (also stores the probe snapshot), `update_job_args` (one atomic `UPDATE ... WHERE status != 'running'`, raising `JobRunning` / `JobNotFound`), and `load_source_summary`.
 - **`cli/_pipeline.py`** — shared interactive pipeline helpers used by both `ingest.py` and `queue.py`: probe-table display, `build_preview`, mismatch detection, `prompt_metadata`, `prompt_encoding_config`, `preview_and_confirm`, the `$EDITOR` round-trip (probe objects are kept out of the JSON and re-attached by `source_path`), and the disc-split interactive flow (`prompt_disc_split`, `_disc_split_confirm_loop`, `_build_disc_split_jobs`).
 - **`cli/disc_split.py`** — pure algorithmic module (no I/O) for multi-episode disc splitting: `Episode` dataclass, `autodetect` (greedy ±35% duration grouping), `groups_to_episodes`, `fixed_split`, `manual_entry`.
@@ -620,6 +673,9 @@ Output filename templates:
 
 - TV: `{staging_root}/{show}/Season {season:02d}/{show} - S{season:02d}E{episode:02d}.mkv`
 - Movie: `{staging_root}/{movie}/{movie}.mkv`
+
+With a year (v0.6, see "TVDB lookup"), the `{show}`/`{movie}` folder becomes
+`Name (Year)`, as does the movie file name; TV episode file names are unchanged.
 
 ## Ingest CLI flow (`rne ingest`)
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 import pathlib
 from dataclasses import dataclass, field
 
+from rne import naming as names
 from rne import plan, probe
 from rne.cli._pipeline import _build_disc_split_jobs, _describe_mismatch, mungefilename
 from rne.cli.disc_split import Episode
@@ -23,15 +24,24 @@ class Naming:
     season: int | None = None
     first_episode: int | None = None
     disc_split: bool = False
+    year: int | None = None  # from TVDB or typed; adds "(year)" to the folder
+    tvdb_id: int | None = None  # set only by picking a TVDB match
 
     @property
     def clean_title(self) -> str:
         return mungefilename(self.title.strip())
 
+    @property
+    def folder(self) -> str:
+        """The show/movie folder name: 'Show (2025)' or 'Show'."""
+        return names.folder_name(self.clean_title, self.year)
+
     def errors(self) -> list[str]:
         errors = []
         if not self.clean_title:
             errors.append("name can't be empty")
+        if self.year is not None and not 1880 <= self.year <= 2100:
+            errors.append("year must be a 4-digit year (or blank)")
         if self.is_tv:
             if self.season is None or self.season < 0:
                 errors.append("season must be 0 (specials) or more")
@@ -71,7 +81,7 @@ class Draft:
     @property
     def staging_dir(self) -> pathlib.Path:
         """The show/movie folder outputs (and ingest raws) go under."""
-        return self.staging_override or self.staging_root / self.naming.clean_title
+        return self.staging_override or self.staging_root / self.naming.folder
 
     @property
     def reference(self) -> Source | None:
@@ -123,11 +133,13 @@ class Draft:
             )
             for job in jobs:
                 job["source_chapters"] = self.chapters
+                job["year"], job["tvdb_id"] = n.year, n.tvdb_id
             return jobs
         if n.is_tv:
             return [
                 plan.tv_job(show=title, season=n.season, episode=ep,  # type: ignore[arg-type]
-                            show_dir=self.staging_dir, source_path=s.path, args=template)
+                            show_dir=self.staging_dir, source_path=s.path, args=template,
+                            year=n.year, tvdb_id=n.tvdb_id)
                 for s, ep in zip(self.sources, self.episode_numbers())
             ]
         jobs = []
@@ -139,7 +151,8 @@ class Draft:
             else:
                 suffix = f"_{pos:02d}"
             jobs.append(plan.movie_job(movie=title, movie_dir=self.staging_dir,
-                                       source_path=s.path, args=template, suffix=suffix))
+                                       source_path=s.path, args=template, suffix=suffix,
+                                       year=n.year, tvdb_id=n.tvdb_id))
         return jobs
 
     def build_plan(self) -> list[dict]:

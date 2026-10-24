@@ -13,7 +13,9 @@ from textual.widgets import Button, DataTable, Footer, Header, Input, Label, Sta
 
 from rne import jobs
 from rne.models import JobStatus
-from rne.tui.common import APP_CSS
+from rne.cli._pipeline import mungefilename
+from rne.tui.common import APP_CSS, Plain, cell
+from rne.tui.lookup import TYPED, Lookup, LookupModal
 from rne.tui.nav import FORM_BINDINGS, NAV_HINT
 from rne.tui.settings import SettingsForm
 
@@ -48,7 +50,7 @@ class PickerScreen(Screen):
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield Static("Pick a job to edit. Running jobs are not listed.", classes="hint")
+        yield Plain("Pick a job to edit. Running jobs are not listed.", classes="hint")
         yield DataTable(cursor_type="row", zebra_stripes=True, id="jobs")
         yield Footer()
 
@@ -60,8 +62,8 @@ class PickerScreen(Screen):
             is_tv = row["show"] is not None
             label = f"S{row['season']:02d}E{row['episode']:02d}" if is_tv else "movie"
             table.add_row(
-                str(row["id"]), row["status"], label, row["show"] or row["movie"],
-                row["batch_label"] or "",
+                str(row["id"]), row["status"], label, cell(row["show"] or row["movie"]),
+                cell(row["batch_label"] or ""),
                 key=f"{row['id']}:{row['ingest_batch_id'] or ''}",
             )
         if table.row_count == 0:
@@ -95,6 +97,7 @@ class EditScreen(Screen):
 
     BINDINGS = [
         Binding("ctrl+s", "save", "Save", priority=True),
+        Binding("ctrl+f", "lookup", "Look up on TVDB"),
         Binding("escape", "cancel", "Cancel"),
         *FORM_BINDINGS,
     ]
@@ -104,6 +107,9 @@ class EditScreen(Screen):
         self.targets = targets
         self.first = targets[0]
         self.batch = len(targets) > 1
+        # TVDB id to save: KEEP each job's own until the name changes or a match is picked.
+        self.tvdb_id: object = jobs.KEEP
+        self._matched_title: str | None = None
 
     # -- layout ------------------------------------------------------------------
 
@@ -111,11 +117,16 @@ class EditScreen(Screen):
         t = self.first
         yield Header()
         with VerticalScroll(id="body"):
-            yield Static(self._heading(), id="heading")
-            yield Static("Naming", classes="section")
+            yield Plain(self._heading(), id="heading")
+            yield Plain("Naming", classes="section")
             with Horizontal(classes="field"):
                 yield Label("Show" if t.is_tv else "Movie")
                 yield Input(t.title, id="title", compact=True)
+            yield Plain(self._match_line(), id="match", classes="muted")
+            with Horizontal(classes="field"):
+                yield Label("Year")
+                yield Input("" if t.year is None else str(t.year), type="integer",
+                            placeholder="optional", id="year", classes="number", compact=True)
             if t.is_tv:
                 with Horizontal(classes="field"):
                     yield Label("Season")
@@ -124,11 +135,11 @@ class EditScreen(Screen):
                 with Horizontal(classes="field"):
                     yield Label("First episode" if self.batch else "Episode")
                     yield Input(str(first_ep), type="integer", id="episode", classes="number", compact=True)
-            yield Static("", id="outputs")
+            yield Plain("", id="outputs")
 
             problems = [x for x in self.targets if x.summary is None]
             if problems:
-                yield Static(
+                yield Plain(
                     "\n".join(f"⚠ {x.label}: {x.probe_error}" for x in problems)
                     + "\nShowing the saved settings. Tracks can't be listed or checked "
                     "without the file, but everything can still be changed.",
@@ -138,14 +149,14 @@ class EditScreen(Screen):
             # Tracks come from the first readable source; settings from the first job.
             yield SettingsForm(readable.summary if readable else None, t.args, id="settings")
             if self.batch:
-                yield Static(
+                yield Plain(
                     f"Settings apply to all {len(self.targets)} jobs; each keeps its "
                     "own chapter range.",
                     classes="hint",
                 )
 
-            yield Static("", id="errors")
-            yield Static(NAV_HINT, classes="hint")
+            yield Plain("", id="errors")
+            yield Plain(NAV_HINT, classes="hint")
             with Horizontal(id="buttons"):
                 yield Button("Save  ctrl+s", variant="primary", id="save", compact=True)
                 yield Button("Cancel  esc", id="cancel", compact=True)
@@ -173,11 +184,49 @@ class EditScreen(Screen):
         text = widgets.first(Input).value.strip()
         return int(text) if text.lstrip("-").isdigit() else None
 
+    def _match_line(self) -> str:
+        if self.app.lookup is None:  # type: ignore[attr-defined]
+            note = self.app.lookup_note  # type: ignore[attr-defined]
+            return f"TVDB lookup off: {note}" if note else ""
+        if isinstance(self.tvdb_id, int):
+            return f"✓ TVDB #{self.tvdb_id} · ctrl+f searches again"
+        return "ctrl+f looks the name up on TVDB"
+
+    def check_action(self, action: str, parameters: tuple) -> bool | None:
+        if action == "lookup":
+            return self.app.lookup is not None  # type: ignore[attr-defined]
+        return True
+
+    def action_lookup(self) -> None:
+        lookup = self.app.lookup  # type: ignore[attr-defined]
+        title = self.query_one("#title", Input).value.strip()
+        if lookup is None or not title:
+            return
+        kind = "series" if self.first.is_tv else "movie"
+        self.app.push_screen(LookupModal(lookup, title, kind), self._apply_match)
+
+    def _apply_match(self, result) -> None:
+        if result is None or result == TYPED:
+            return
+        clean = mungefilename(result.name)
+        self.tvdb_id, self._matched_title = result.tvdb_id, clean
+        self.query_one("#title", Input).value = clean
+        self.query_one("#year", Input).value = str(result.year or "")
+        self.query_one("#match", Static).update(self._match_line())
+        self.refresh_plan()
+
     def current_plan(self) -> tuple[list[jobs.EditResult], list[str]]:
         errors: list[str] = []
         title = self.query_one("#title", Input).value.strip()
         if not title:
             errors.append("name can't be empty")
+        year = self._int("year")
+        if self.query_one("#year", Input).value.strip() and (year is None or not 1880 <= year <= 2100):
+            errors.append("year must be a 4-digit year (or blank)")
+        # A different name means the old TVDB id no longer applies.
+        if title != (self._matched_title or self.first.title):
+            self.tvdb_id = None
+            self.query_one("#match", Static).update(self._match_line())
         season = episode = None
         if self.first.is_tv:
             season, episode = self._int("season"), self._int("episode")
@@ -197,7 +246,8 @@ class EditScreen(Screen):
         if errors:
             return [], errors
         results = jobs.plan_edits(
-            self.targets, template=template, title=title, season=season, first_episode=episode
+            self.targets, template=template, title=title, season=season, first_episode=episode,
+            year=year, tvdb_id=self.tvdb_id,
         )
         for r in results:
             errors += r.errors
@@ -239,11 +289,20 @@ class EditApp(App[tuple[list[str], bool]]):
     CSS = APP_CSS
     TITLE = "rne"
 
-    def __init__(self, conn: sqlite3.Connection, job_ids: list[int] | None = None) -> None:
+    def __init__(
+        self,
+        conn: sqlite3.Connection,
+        job_ids: list[int] | None = None,
+        *,
+        lookup: Lookup | None = None,
+        lookup_note: str | None = None,
+    ) -> None:
         super().__init__()
         self.conn = conn
         self.job_ids = job_ids
         self.picker = job_ids is None
+        self.lookup = lookup
+        self.lookup_note = lookup_note
 
     def on_mount(self) -> None:
         if self.picker:

@@ -506,10 +506,12 @@ def test_naming_arrows_move_between_fields_and_pick_kind(conn, tmp_path):
     async def steps(pilot, app):
         assert app.focused.id == "title"
         await pilot.press("down")
+        assert app.focused.id == "year"
+        await pilot.press("down")
         assert app.focused.id == "season"
         await pilot.press("down")
         assert app.focused.id == "first"
-        await pilot.press("up", "up", "up")
+        await pilot.press("up", "up", "up", "up")
         assert app.focused.id == "kind"
         await pilot.press("right")
         await pilot.pause()
@@ -553,6 +555,19 @@ def test_track_rows_arrow_navigation(conn, tmp_path):
         await pilot.pause()
         assert quality.expanded
         await pilot.press("escape")
+        await pilot.press("ctrl+q")
+
+    _run(app, steps)
+
+
+def test_bracketed_text_is_shown_literally(conn, tmp_path):
+    """Textual markup must not swallow '[eng]' language tags and the like."""
+    app, _ = _ingest_app(conn, tmp_path, FakeDisc())
+
+    async def steps(pilot, app):
+        table = app.screen.query_one(DataTable)
+        audio = [str(table.get_row_at(i)[-1]) for i in range(table.row_count)]
+        assert any("[eng]" in a for a in audio), audio
         await pilot.press("ctrl+q")
 
     _run(app, steps)

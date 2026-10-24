@@ -1,4 +1,31 @@
-"""Styles shared by the rne terminal apps."""
+"""Styles and small widgets shared by the rne terminal apps."""
+
+from rich.text import Text
+from textual.content import Content
+from textual.widgets import Static
+
+
+class Plain(Static):
+    """Static that shows its text literally.
+
+    Textual reads "[...]" as style markup, which would swallow things like a
+    "[eng]" language tag, "[tvdb]" in a message, or brackets in a file name.
+    """
+
+    def __init__(self, content: str = "", **kwargs) -> None:
+        kwargs.setdefault("markup", False)
+        super().__init__(content, **kwargs)
+
+
+def plain(text: object) -> Content:
+    """A widget label shown literally (see Plain)."""
+    return Content(str(text))
+
+
+def cell(text: object) -> Text:
+    """A DataTable cell shown literally. (A Content cell isn't measured, so
+    its column collapses to the header's width.)"""
+    return Text(str(text))
 
 APP_CSS = """
 Screen { background: $surface; }

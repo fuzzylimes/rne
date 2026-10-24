@@ -99,7 +99,7 @@ class DiskConfig:
 
 _EMPTY_DISK_CONFIG = DiskConfig(default_disk=None, disks={})
 
-_TOP_LEVEL_KEYS = frozenset({"default_disk", "disks", "notifications"})
+_TOP_LEVEL_KEYS = frozenset({"default_disk", "disks", "notifications", "tvdb"})
 _DISK_KEYS = frozenset({"media_root", "staging_root"})
 
 
@@ -391,6 +391,61 @@ def load_notify_config(path: str | Path | None = None) -> NotifyConfig:
         return _parse_mqtt(raw_notify["mqtt"])
     except ConfigError as exc:
         raise ConfigError(f"{config_file}: {exc}") from None
+
+
+# ---------------------------------------------------------------------------
+# TVDB lookup
+#
+# Optional [tvdb] table. With an api_key, naming offers a TVDB search and
+# saves "Name (Year)"; without one, naming works exactly as before.
+# ---------------------------------------------------------------------------
+
+DEFAULT_TVDB_LANGUAGE = "eng"
+DEFAULT_TVDB_CACHE_DAYS = 7
+
+
+@dataclass(frozen=True)
+class TvdbConfig:
+    api_key: str
+    language: str = DEFAULT_TVDB_LANGUAGE
+    cache_ttl_days: int = DEFAULT_TVDB_CACHE_DAYS
+    pin: str | None = None  # only for user-supported keys; most keys need none
+
+
+_TVDB_KEYS = frozenset({"api_key", "language", "cache_ttl_days", "pin"})
+
+
+def load_tvdb_config(path: str | Path | None = None) -> tuple[TvdbConfig | None, str | None]:
+    """Load [tvdb]. Returns (config, skipped_reason).
+
+    No file or no table: (None, None), lookup off and nothing to say. A table
+    without api_key: (None, reason). A malformed table raises ConfigError,
+    like every other section.
+    """
+    config_file = Path(path) if path is not None else Path(CONFIG_PATH)
+    data = _read_toml(config_file)
+    if data is None or "tvdb" not in data:
+        return None, None
+    raw = data["tvdb"]
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{config_file}: 'tvdb' must be a table")
+    unknown = sorted(set(raw) - _TVDB_KEYS)
+    if unknown:
+        raise ConfigError(f"{config_file}: [tvdb]: unknown key(s): {', '.join(unknown)}")
+    for key in ("api_key", "language", "pin"):
+        if key in raw and (not isinstance(raw[key], str) or not raw[key].strip()):
+            raise ConfigError(f"{config_file}: [tvdb]: {key} must be a non-empty string")
+    ttl = raw.get("cache_ttl_days", DEFAULT_TVDB_CACHE_DAYS)
+    if isinstance(ttl, bool) or not isinstance(ttl, int) or ttl < 0:
+        raise ConfigError(f"{config_file}: [tvdb]: cache_ttl_days must be 0 or more")
+    if "api_key" not in raw:
+        return None, "[tvdb] has no api_key"
+    return TvdbConfig(
+        api_key=raw["api_key"].strip(),
+        language=raw.get("language", DEFAULT_TVDB_LANGUAGE).strip(),
+        cache_ttl_days=ttl,
+        pin=raw["pin"].strip() if "pin" in raw else None,
+    ), None
 
 
 def resolve_roots(

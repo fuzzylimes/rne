@@ -188,6 +188,8 @@ def test_tv_job_entry():
         "season": 1,
         "episode": 5,
         "movie": None,
+        "year": None,
+        "tvdb_id": None,
         "source_path": "/r/a.mkv",
         "output_path": "/s/Initial D/Season 01/Initial D - S01E05.mkv",
         "handbrake_args": args,

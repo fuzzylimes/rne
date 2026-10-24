@@ -262,6 +262,27 @@ but a *misspelled* key is treated like any other config typo and stops the
 command with exit 2 before the disc spins up, so a silent `topc = "rne/rip"`
 can't leave you waiting for a notification that was never going to arrive.
 
+### Looking names up on TVDB
+
+Add your TVDB v4 API key (the same one jfvnamer uses) to the config file:
+
+```toml
+[tvdb]
+api_key = "your-key-here"
+# language = "eng"        # optional
+# cache_ttl_days = 7      # optional
+```
+
+Then, on the Naming step (and in `rne edit`), pressing Enter on the name (or
+ctrl+f) searches TVDB. Pick the right result and rne fills in the official name
+and the year:
+
+- TV: `Breaking Bad (2008)/Season 01/Breaking Bad - S01E01.mkv`
+- Movie: `Heat (1995)/Heat (1995).mkv`
+
+ctrl+t keeps the name as you typed it. Without a key everything works as
+before, and you can still type a year yourself.
+
 ### Multi-episode discs
 
 Some discs (common in anime releases) pack all episodes into a single title using chapters rather than separate titles. When you select exactly one TV title — in either `rne ingest` or `rne queue` — the CLI asks:
