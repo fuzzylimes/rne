@@ -254,6 +254,9 @@ def run_tui(args, roots: config.Roots) -> None:
 
 def finish(result: tuple[list[str], bool] | None) -> None:
     """Print what the app reported and exit non-zero if it failed."""
+    from rne.tui.common import clear_after_app
+
+    clear_after_app()
     lines, ok = result or (["Quit; nothing was queued."], True)
     for line in lines:
         print(line, file=sys.stdout if ok else sys.stderr)

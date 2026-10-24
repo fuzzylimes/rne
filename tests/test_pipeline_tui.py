@@ -571,3 +571,14 @@ def test_bracketed_text_is_shown_literally(conn, tmp_path):
         await pilot.press("ctrl+q")
 
     _run(app, steps)
+
+
+@pytest.mark.parametrize("tty", [True, False])
+def test_finish_clears_terminal_only_when_interactive(monkeypatch, capsys, tty):
+    from rne.cli.ingest import finish
+
+    monkeypatch.setattr("sys.stdout.isatty", lambda: tty)
+    finish((["Queued 2 job(s) (batch 7)."], True))
+    out = capsys.readouterr().out
+    assert out.endswith("Queued 2 job(s) (batch 7).\n")
+    assert out.startswith("\033[H\033[2J") is tty

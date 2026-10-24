@@ -1,8 +1,24 @@
 """Styles and small widgets shared by the rne terminal apps."""
 
+import sys
+
 from rich.text import Text
 from textual.content import Content
 from textual.widgets import Static
+
+
+def clear_after_app() -> None:
+    """Clear the terminal once a full-screen app has exited.
+
+    Textual draws on the terminal's alternate screen, so normally the shell
+    comes back as it was. GNU screen (alternate screen off by default) and
+    some SSH clients leave the app's last frame behind instead; clearing
+    makes the summary that follows land at the top of a clean terminal.
+    Only for a real terminal, so piped output never gets escape codes.
+    """
+    if sys.stdout.isatty():
+        sys.stdout.write("\033[H\033[2J")  # cursor home, clear screen (scrollback kept)
+        sys.stdout.flush()
 
 
 class Plain(Static):

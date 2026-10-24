@@ -41,7 +41,11 @@ def run_tui(args) -> None:
     else:
         job_ids = None
     # None when the user quits from the picker.
-    lines, ok = EditApp(conn, job_ids, lookup=lookup, lookup_note=lookup_note).run() or ([], True)
+    from rne.tui.common import clear_after_app
+
+    result = EditApp(conn, job_ids, lookup=lookup, lookup_note=lookup_note).run()
+    clear_after_app()
+    lines, ok = result or ([], True)
     for line in lines:
         print(line)
     if not ok:
