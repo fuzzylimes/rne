@@ -14,6 +14,7 @@ from textual.widgets import Button, DataTable, Footer, Header, Input, Label, Sta
 from rne import jobs
 from rne.models import JobStatus
 from rne.tui.common import APP_CSS
+from rne.tui.nav import FORM_BINDINGS, NAV_HINT
 from rne.tui.settings import SettingsForm
 
 
@@ -95,6 +96,7 @@ class EditScreen(Screen):
     BINDINGS = [
         Binding("ctrl+s", "save", "Save", priority=True),
         Binding("escape", "cancel", "Cancel"),
+        *FORM_BINDINGS,
     ]
 
     def __init__(self, targets: list[jobs.EditTarget]) -> None:
@@ -126,23 +128,24 @@ class EditScreen(Screen):
 
             problems = [x for x in self.targets if x.summary is None]
             if problems:
-                yield Static("Settings", classes="section")
                 yield Static(
-                    "\n".join(x.probe_error or "" for x in problems)
-                    + "\nTrack settings can't be shown without the source file. "
-                    "Naming can still be changed; use `rne edit --raw ID` for settings.",
+                    "\n".join(f"⚠ {x.label}: {x.probe_error}" for x in problems)
+                    + "\nShowing the saved settings. Tracks can't be listed or checked "
+                    "without the file, but everything can still be changed.",
+                    classes="warn",
+                )
+            readable = next((x for x in self.targets if x.summary is not None), None)
+            # Tracks come from the first readable source; settings from the first job.
+            yield SettingsForm(readable.summary if readable else None, t.args, id="settings")
+            if self.batch:
+                yield Static(
+                    f"Settings apply to all {len(self.targets)} jobs; each keeps its "
+                    "own chapter range.",
                     classes="hint",
                 )
-            else:
-                yield SettingsForm(t.summary, t.args, id="settings")  # type: ignore[arg-type]
-                if self.batch:
-                    yield Static(
-                        f"Settings apply to all {len(self.targets)} jobs; each keeps its "
-                        "own chapter range.",
-                        classes="hint",
-                    )
 
             yield Static("", id="errors")
+            yield Static(NAV_HINT, classes="hint")
             with Horizontal(id="buttons"):
                 yield Button("Save  ctrl+s", variant="primary", id="save", compact=True)
                 yield Button("Cancel  esc", id="cancel", compact=True)

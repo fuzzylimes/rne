@@ -191,25 +191,26 @@ def subtitle_label(track: int, stream: SubtitleStream) -> str:
 # ---------------------------------------------------------------------------
 
 
-def validate(args: HandbrakeArgs, summary: StreamSummary) -> list[str]:
+def validate(args: HandbrakeArgs, summary: StreamSummary | None) -> list[str]:
     """Problems that would make this encode wrong for this source. Empty = OK.
 
     The dataclasses already enforce per-field shape (bitrate vs copy, positive
     track numbers); this checks the settings against the file's real tracks.
+    summary None (source unreadable) skips the checks that need the file.
     """
     errors: list[str] = []
     if not args.audio_tracks:
         errors.append("at least one audio track is required")
     seen_audio: set[int] = set()
     for t in args.audio_tracks:
-        if t.track > len(summary.audio):
+        if summary is not None and t.track > len(summary.audio):
             errors.append(f"audio track {t.track} does not exist (source has {len(summary.audio)})")
         if t.track in seen_audio:
             errors.append(f"audio track {t.track} is listed twice")
         seen_audio.add(t.track)
     seen_subs: set[int] = set()
     for s in args.subtitle_tracks:
-        if s.track > len(summary.subtitle):
+        if summary is not None and s.track > len(summary.subtitle):
             errors.append(
                 f"subtitle track {s.track} does not exist (source has {len(summary.subtitle)})"
             )
@@ -320,19 +321,27 @@ class SubtitleRow:
     default: bool
 
 
-def _missing_label(track: int) -> str:
-    return f"{track}: not in source file"
+def _missing_label(track: int, source_known: bool = True) -> str:
+    return f"{track}: not in source file" if source_known else f"{track}: (source not readable)"
 
 
-def audio_rows(summary: StreamSummary, args: HandbrakeArgs) -> list[AudioRow]:
-    """Included tracks first, in playback order; then the rest in source order."""
+_NO_SOURCE = StreamSummary(video=[], audio=[], subtitle=[])
+
+
+def audio_rows(summary: StreamSummary | None, args: HandbrakeArgs) -> list[AudioRow]:
+    """Included tracks first, in playback order; then the rest in source order.
+
+    summary None (source unreadable): only the job's own tracks.
+    """
+    known = summary is not None
+    summary = summary or _NO_SOURCE
     rows: list[AudioRow] = []
     chosen = {t.track for t in args.audio_tracks}
     for t in args.audio_tracks:
         stream = summary.audio[t.track - 1] if t.track <= len(summary.audio) else None
         rows.append(AudioRow(
             track=t.track,
-            label=audio_label(t.track, stream) if stream else _missing_label(t.track),
+            label=audio_label(t.track, stream) if stream else _missing_label(t.track, known),
             include=True,
             codec=t.codec,
             bitrate=t.bitrate,
@@ -353,8 +362,10 @@ def audio_rows(summary: StreamSummary, args: HandbrakeArgs) -> list[AudioRow]:
     return rows
 
 
-def subtitle_rows(summary: StreamSummary, args: HandbrakeArgs) -> list[SubtitleRow]:
+def subtitle_rows(summary: StreamSummary | None, args: HandbrakeArgs) -> list[SubtitleRow]:
     """Source order, then any chosen tracks the source doesn't have."""
+    known = summary is not None
+    summary = summary or _NO_SOURCE
     chosen = {s.track: s for s in args.subtitle_tracks}
     rows = [
         SubtitleRow(
@@ -367,7 +378,7 @@ def subtitle_rows(summary: StreamSummary, args: HandbrakeArgs) -> list[SubtitleR
     ]
     for track, s in chosen.items():
         if track > len(summary.subtitle):
-            rows.append(SubtitleRow(track, _missing_label(track), True, s.default))
+            rows.append(SubtitleRow(track, _missing_label(track, known), True, s.default))
     return rows
 
 

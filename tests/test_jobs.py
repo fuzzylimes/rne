@@ -72,11 +72,12 @@ def test_concurrent_init_db_does_not_fail(tmp_path):
     def worker():
         try:
             c = db.connect(path)
-            start.wait()
+            start.wait(timeout=10)
             db.init_db(c)
             c.close()
         except BaseException as exc:  # noqa: BLE001 - surfaced by the assert
             errors.append(exc)
+            start.abort()  # never leave the other threads waiting
 
     threads = [threading.Thread(target=worker) for _ in range(4)]
     for t in threads:

@@ -8,6 +8,8 @@ Screen { background: $surface; }
 .field Label { width: 16; }
 .field Input { width: 50; }
 .field Input.number { width: 8; }
+.field Input { background: $boost; }
+.field Input:focus { background: $primary 30%; }
 #errors { color: $error; margin-top: 1; }
 #outputs { color: $text-muted; }
 #buttons { height: auto; margin-top: 1; }

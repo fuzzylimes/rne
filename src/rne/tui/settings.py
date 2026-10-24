@@ -12,9 +12,11 @@ from textual.containers import Horizontal, Vertical
 from textual.message import Message
 from textual.widgets import Button, Checkbox, Label, Select, Static
 
+
 from rne import config, plan
 from rne.models import HandbrakeArgs
 from rne.probe import StreamSummary
+from rne.tui.nav import NavRow, NavSelect
 
 _NO_TUNE = "none"  # Select can't hold None as a value
 
@@ -26,7 +28,7 @@ def _with_current(options: list[tuple[str, object]], current: object, label: str
     return options
 
 
-class AudioRowWidget(Horizontal):
+class AudioRowWidget(NavRow):
     """One source audio track: include, codec, bitrate, move up/down."""
 
     DEFAULT_CSS = """
@@ -48,14 +50,14 @@ class AudioRowWidget(Horizontal):
         self.set_class(not r.include, "excluded")
         yield Checkbox(r.label, r.include, classes="include", compact=True)
         codecs = _with_current([(c, c) for c in plan.AUDIO_CODECS], r.codec, r.codec)
-        yield Select(codecs, value=r.codec, allow_blank=False, compact=True, classes="codec")
+        yield NavSelect(codecs, value=r.codec, allow_blank=False, compact=True, classes="codec")
         bitrate = r.bitrate or r.recommended_bitrate
         rates = [
             (f"{b}k" + (" (rec.)" if b == r.recommended_bitrate else ""), b)
             for b in plan.AUDIO_BITRATES
         ]
         rates = _with_current(rates, bitrate, f"{bitrate}k")
-        yield Select(
+        yield NavSelect(
             rates, value=bitrate, allow_blank=False, compact=True,
             classes="bitrate", disabled=r.codec == "copy",
         )
@@ -107,7 +109,7 @@ class AudioRowWidget(Horizontal):
         self.post_message(SettingsForm.Changed())
 
 
-class SubtitleRowWidget(Horizontal):
+class SubtitleRowWidget(NavRow):
     """One source subtitle track: include and default."""
 
     DEFAULT_CSS = """
@@ -172,7 +174,7 @@ class SettingsForm(Vertical):
 
     def __init__(
         self,
-        summary: StreamSummary,
+        summary: StreamSummary | None,
         args: HandbrakeArgs,
         *,
         is_dvd: bool = False,
@@ -185,7 +187,9 @@ class SettingsForm(Vertical):
 
     def compose(self) -> ComposeResult:
         args = self.base
-        dvd_source = plan.is_dvd_source(self.summary, self.is_dvd)
+        # None: the source can't be read; show the job's own settings only.
+        known = self.summary or StreamSummary(video=[], audio=[], subtitle=[])
+        dvd_source = plan.is_dvd_source(known, self.is_dvd)
 
         yield Static("Audio", classes="section")
         yield Static("Tick tracks to keep. The first kept track plays by default; ▲▼ reorder.",
@@ -198,6 +202,8 @@ class SettingsForm(Vertical):
         sub_rows = plan.subtitle_rows(self.summary, args)
         if sub_rows:
             yield Static("Few frames usually means a forced-only track.", classes="hint")
+        elif self.summary is None:
+            yield Static("No subtitle tracks chosen.", classes="hint")
         else:
             yield Static("No subtitle tracks in the source.", classes="hint")
         with Vertical(id="sub-rows"):
@@ -211,7 +217,7 @@ class SettingsForm(Vertical):
         ]
         with Horizontal(classes="field"):
             yield Label("Quality (CRF)")
-            yield Select(qualities, value=args.quality, allow_blank=False, compact=True, id="quality")
+            yield NavSelect(qualities, value=args.quality, allow_blank=False, compact=True, id="quality")
             yield Static("lower = better quality, bigger file", classes="reason")
         default_preset = plan.default_preset(dvd_source)
         presets = [
@@ -219,23 +225,23 @@ class SettingsForm(Vertical):
         ]
         with Horizontal(classes="field"):
             yield Label("Preset")
-            yield Select(_with_current(presets, args.preset, args.preset),
+            yield NavSelect(_with_current(presets, args.preset, args.preset),
                          value=args.preset, allow_blank=False, compact=True, id="preset")
             yield Static("slower = smaller file at the same quality", classes="reason")
         tunes = [(t or _NO_TUNE, t or _NO_TUNE) for t in plan.ENCODER_TUNES]
         current_tune = args.tune or _NO_TUNE
         with Horizontal(classes="field"):
             yield Label("Tune")
-            yield Select(_with_current(tunes, current_tune, current_tune),
+            yield NavSelect(_with_current(tunes, current_tune, current_tune),
                          value=current_tune, allow_blank=False, compact=True, id="tune")
             yield Static("animation for cartoons and anime", classes="reason")
-        detelecine = plan.detelecine_option(self.summary, dvd_source)
+        detelecine = plan.detelecine_option(known, dvd_source)
         with Horizontal(classes="field"):
             yield Label("Detelecine")
             yield Checkbox("", args.detelecine, id="detelecine", compact=True)
             yield Static(f"recommended on: {detelecine.reason}" if detelecine else "",
                          classes="reason")
-        decomb = plan.decomb_option(self.summary, dvd_source)
+        decomb = plan.decomb_option(known, dvd_source)
         with Horizontal(classes="field"):
             yield Label("Decomb")
             yield Checkbox("", args.decomb, id="decomb", compact=True)

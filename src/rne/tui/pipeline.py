@@ -42,6 +42,7 @@ from rne.cli.disc_split import autodetect, fixed_split, groups_to_episodes, pars
 from rne.models import HandbrakeArgs
 from rne.tui.common import APP_CSS
 from rne.tui.flow import Draft, Source
+from rne.tui.nav import FORM_BINDINGS, NAV_HINT, NavRadioSet
 from rne.tui.settings import SettingsForm
 
 DEFAULT_EPISODE_MINUTES = 24
@@ -67,6 +68,7 @@ class StepScreen(Screen):
     """Base for the wizard steps."""
 
     STEP = ""
+    BINDINGS = FORM_BINDINGS
 
     @property
     def draft(self) -> Draft:
@@ -159,9 +161,9 @@ class NamingScreen(StepScreen):
         Binding("escape", "back", "Back"),
     ]
     DEFAULT_CSS = """
-    NamingScreen RadioSet { layout: horizontal; height: auto; width: auto; border: none;
+    NamingScreen NavRadioSet { layout: horizontal; height: auto; width: auto; border: none;
                             padding: 0; }
-    NamingScreen RadioSet > RadioButton { width: auto; margin-right: 4; }
+    NamingScreen NavRadioSet > RadioButton { width: auto; margin-right: 4; }
     NamingScreen .tv-only.hidden { display: none; }
     """
 
@@ -176,7 +178,7 @@ class NamingScreen(StepScreen):
                                        for i, s in enumerate(self.draft.sources, 1)),
                              classes="muted")
             yield Static("What is it?", classes="section")
-            with RadioSet(id="kind", disabled=locked):
+            with NavRadioSet(id="kind", disabled=locked):
                 yield RadioButton("TV episodes", value=n.is_tv, id="tv")
                 yield RadioButton("Movie", value=not n.is_tv, id="movie")
             with Horizontal(classes="field"):
@@ -197,6 +199,7 @@ class NamingScreen(StepScreen):
                                disabled=locked)
             yield Static("", id="preview", classes="ok")
             yield Static("", id="errors")
+            yield Static(NAV_HINT, classes="hint")
             with Horizontal(id="buttons"):
                 yield Button("Back  esc", id="back", compact=True,
                              disabled=self._back_target() is None)
@@ -498,6 +501,7 @@ class TracksScreen(StepScreen):
             yield Static(_video_line(summary), classes="muted")
             yield SettingsForm(summary, args, is_dvd=d.is_dvd, id="settings")
             yield Static("", id="errors")
+            yield Static(NAV_HINT, classes="hint")
             with Horizontal(id="buttons"):
                 if self.override:
                     yield Button("Cancel  esc", id="back", compact=True)

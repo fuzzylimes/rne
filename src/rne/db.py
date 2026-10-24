@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pathlib
 import sqlite3
+import time
 from typing import TYPE_CHECKING
 
 from rne import config
@@ -77,13 +78,30 @@ INSERT OR IGNORE INTO queue_settings (id) VALUES (1);
 """
 
 
+def _enable_wal(conn: sqlite3.Connection, attempts: int = 50) -> None:
+    """Switch to WAL, retrying briefly.
+
+    On a brand-new database the switch takes an exclusive lock and reports
+    "database is locked" at once (ignoring busy_timeout) if another process
+    is opening it at the same moment, e.g. worker and dashboard at first boot.
+    """
+    for attempt in range(attempts):
+        try:
+            conn.execute("PRAGMA journal_mode = WAL")
+            return
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc) or attempt == attempts - 1:
+                raise
+            time.sleep(0.1)
+
+
 def connect(db_path: str | None = None) -> sqlite3.Connection:
     path = pathlib.Path(db_path or config.DB_PATH)
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA busy_timeout = 5000")
+    _enable_wal(conn)
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA synchronous = NORMAL")
     return conn

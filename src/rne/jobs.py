@@ -220,8 +220,12 @@ def load_edit_targets(
         summary, error = None, None
         try:
             summary, _ = load_source_summary(conn, job_id, probe_file=probe_file)
-        except Exception as exc:  # missing/unreadable source: still editable by name
-            error = f"cannot read {row['source_path']}: {exc}"
+        except Exception as exc:  # missing/unreadable source: still editable
+            source = row["source_path"]
+            if not pathlib.Path(source).exists():
+                error = f"source file not found: {source}"
+            else:
+                error = f"ffprobe could not read {source}: {exc}"
         is_tv = row["show"] is not None
         targets.append(EditTarget(
             job_id=row["id"],

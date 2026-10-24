@@ -425,6 +425,7 @@ asks the same questions in the same order, and the answers produce the same jobs
   left untouched.
 - **Queue mode** creates its batch row when the jobs are queued rather than up
   front, so quitting early leaves no empty batch.
+- **Keys** (`tui/nav.py`, shared with `rne edit`): ↑/↓ move between fields, and dropdowns open with Enter/Space so the arrows pass over them. ←/→ change the TV/Movie choice. In track lists, ↑/↓ move between rows in the same column and ←/→ along a row. Tables keep their own arrow keys. Form screens show this as a hint line, because the footer can't display ↑/↓.
 - **Quit** is ctrl+q (refused while a rip is running). It exits 0 and, after a
   rip, prints where the raws are and the `rne queue` command to resume. Errors
   (abort after a failed rip, unreadable first file) exit 1.
@@ -892,7 +893,7 @@ CLI exits. The worker (running independently under systemd) claims the first job
   - **Batch edits:** settings apply to every job in the batch. Each job keeps its own chapter range, encoder and `extra_args` (`jobs.plan_edits`).
   - **Errors:** shown live (tracks missing from the source, duplicate outputs, empty name); Save stays disabled until they're fixed.
   - **Saving:** `jobs.apply_edits` saves each job atomically unless it became `running` meanwhile; any job that couldn't be saved gives a non-zero exit.
-  - **Unreadable source:** if the source can't be probed (moved or deleted), only naming can be edited.
+  - **Unreadable source:** if the source can't be probed, the screen says why ("source file not found: …", or ffprobe's error), still shows the job's saved settings (chosen tracks labelled "(source not readable)"), and allows editing them. Only the checks that need the file are skipped (`plan.validate(args, None)`).
 - **`rne edit <id> --raw`** — the pre-v0.6 editor: opens that job's `handbrake_args` JSON in `$EDITOR`. On save, validates and writes back. **Refuses to edit a `running` job** with a non-zero exit. Editing other states (queued, paused, failed, interrupted, cancelled, done) is allowed. Validation criteria (all must pass; on failure the user is offered a chance to re-open the editor):
   1. **JSON parses** — the file content is valid JSON.
   2. **Conforms to `HandbrakeArgs` schema** — the top-level object contains only the known fields (`encoder`, `quality`, `preset`, `audio_tracks`, `subtitle_tracks`, `detelecine`, `decomb`, `tune`, `extra_args`); unknown keys are rejected.

@@ -264,6 +264,7 @@ def test_ingest_happy_path(conn, tmp_path):
         await pilot.press("down", "down", "space", "down", "space", "enter")
         await pilot.pause()
         assert isinstance(app.screen, NamingScreen)
+        assert app.focused.id == "title"  # ready to type the name straight away
         _fill_naming(app.screen, "Initial D", 1, 5)
         await pilot.pause()
         assert "S01E05, S01E06" in str(app.screen.query_one("#preview").render())
@@ -492,3 +493,66 @@ def test_parser_plain_flag(argv, plain):
     from rne.cli import _build_parser
 
     assert _build_parser().parse_args(argv).plain is plain
+
+
+# ---------------------------------------------------------------------------
+# Arrow-key navigation
+# ---------------------------------------------------------------------------
+
+
+def test_naming_arrows_move_between_fields_and_pick_kind(conn, tmp_path):
+    app = _queue_app(conn, tmp_path, ["a.mkv"], {"a.mkv": SUMMARY})
+
+    async def steps(pilot, app):
+        assert app.focused.id == "title"
+        await pilot.press("down")
+        assert app.focused.id == "season"
+        await pilot.press("down")
+        assert app.focused.id == "first"
+        await pilot.press("up", "up", "up")
+        assert app.focused.id == "kind"
+        await pilot.press("right")
+        await pilot.pause()
+        assert app.draft.naming.is_tv is False
+        assert all(not w.display for w in app.screen.query(".tv-only"))
+        await pilot.press("left")
+        await pilot.pause()
+        assert app.draft.naming.is_tv is True
+        await pilot.press("ctrl+q")
+
+    _run(app, steps)
+
+
+def test_track_rows_arrow_navigation(conn, tmp_path):
+    app = _queue_app(conn, tmp_path, ["a.mkv"], {"a.mkv": SUMMARY})
+
+    async def steps(pilot, app):
+        from rne.tui.settings import AudioRowWidget, SubtitleRowWidget
+        _fill_naming(app.screen, "Show", 1, 1)
+        await pilot.press("ctrl+n")
+        await _settle(pilot)
+        rows = list(app.screen.query(AudioRowWidget))
+        first_box = rows[0].query_one(".include")
+        first_box.focus()
+        await pilot.pause()
+        await pilot.press("right")  # along the row: include → codec
+        assert app.focused is rows[0].query_one(".codec")
+        await pilot.press("down")  # row 2 is unticked (codec hidden) → its checkbox
+        assert app.focused is rows[1].query_one(".include")
+        await pilot.press("up")
+        assert app.focused is first_box
+        await pilot.press("down", "down")  # past the audio list → first subtitle row
+        sub = app.screen.query_one(SubtitleRowWidget)
+        assert app.focused is sub.query_one(".include")
+        await pilot.press("down")  # past the subtitles → quality dropdown
+        quality = app.screen.query_one("#quality")
+        assert app.focused is quality
+        await pilot.press("down")  # ↓ moves on rather than opening the dropdown
+        assert app.focused is app.screen.query_one("#preset") and not quality.expanded
+        await pilot.press("up", "enter")
+        await pilot.pause()
+        assert quality.expanded
+        await pilot.press("escape")
+        await pilot.press("ctrl+q")
+
+    _run(app, steps)

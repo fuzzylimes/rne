@@ -139,15 +139,28 @@ def test_batch_job_ids_skips_running(conn, tmp_path, batch):
     assert jobs.batch_job_ids(conn, batch_id) == [ids[0], ids[2]]
 
 
-def test_load_edit_targets_unreadable_source(conn, tmp_path):
-    job_id = _tv_job(conn, tmp_path, 1, snapshot=False)
+def test_load_edit_targets_missing_source(conn, tmp_path):
+    job_id = _tv_job(conn, tmp_path, 1, snapshot=False)  # /r/t1.mkv doesn't exist
 
     def broken(path):
         raise FileNotFoundError(path)
 
     (t,) = jobs.load_edit_targets(conn, [job_id], probe_file=broken)
-    assert t.summary is None and "cannot read /r/t1.mkv" in t.probe_error
+    assert t.summary is None and t.probe_error == "source file not found: /r/t1.mkv"
     assert (t.title, t.label, t.is_tv) == ("Initial D", "S01E01", True)
+
+
+def test_load_edit_targets_unprobeable_source(conn, tmp_path):
+    job_id = _tv_job(conn, tmp_path, 1, snapshot=False)
+    source = tmp_path / "corrupt.mkv"
+    source.write_bytes(b"not a video")
+    conn.execute("UPDATE jobs SET source_path = ?", (str(source),))
+
+    def broken(path):
+        raise RuntimeError("Invalid data found")
+
+    (t,) = jobs.load_edit_targets(conn, [job_id], probe_file=broken)
+    assert t.probe_error == f"ffprobe could not read {source}: Invalid data found"
 
 
 def test_plan_edits_renumbers_and_keeps_chapters(conn, tmp_path, batch):
@@ -335,17 +348,22 @@ def test_tui_running_job_refused(conn, tmp_path):
     assert not ok and "currently running" in lines[0]
 
 
-def test_tui_missing_source_allows_naming_only(conn, tmp_path, monkeypatch):
-    job_id = _tv_job(conn, tmp_path, 5, snapshot=False)
-    def unreadable(conn, job_id, **kwargs):
-        raise FileNotFoundError("/r/t5.mkv")
-
-    monkeypatch.setattr(jobs, "load_source_summary", unreadable)
+def test_tui_unreadable_source_still_shows_saved_settings(conn, tmp_path):
+    saved = HandbrakeArgs(audio_tracks=[AudioTrack(2, "ac3", 640), AudioTrack(1)],
+                          subtitle_tracks=[SubtitleTrack(3, default=True)], quality=22)
+    job_id = _tv_job(conn, tmp_path, 5, snapshot=False, args=saved)  # source doesn't exist
 
     async def steps(pilot, app):
         screen = app.screen
-        assert not screen.query(SettingsForm)
+        assert "source file not found: /r/t5.mkv" in str(screen.query_one(".warn").render())
+        rows = [w.read() for w in screen.query(AudioRowWidget)]
+        assert [(r.track, r.label, r.codec) for r in rows] == [
+            (2, "2: (source not readable)", "ac3"), (1, "1: (source not readable)", "copy"),
+        ]
+        assert [w.read().default for w in screen.query(SubtitleRowWidget)] == [True]
+        assert str(screen.query_one("#errors").render()) == ""  # can't check tracks: no errors
         screen.query_one("#title", Input).value = "Initial D Stage 1"
+        screen.query_one("#quality", Select).value = 18
         await pilot.pause()
         await pilot.press("ctrl+s")
 
@@ -353,7 +371,18 @@ def test_tui_missing_source_allows_naming_only(conn, tmp_path, monkeypatch):
     assert ok
     row = conn.execute("SELECT show, handbrake_args FROM jobs").fetchone()
     assert row["show"] == "Initial D Stage 1"
-    assert HandbrakeArgs.from_json(row["handbrake_args"]) == HandbrakeArgs()
+    args = HandbrakeArgs.from_json(row["handbrake_args"])
+    assert (args.quality, args.audio_tracks, args.subtitle_tracks) == (
+        18, saved.audio_tracks, saved.subtitle_tracks
+    )
+
+
+def test_validate_without_source_skips_track_checks():
+    args = HandbrakeArgs(audio_tracks=[AudioTrack(9)], subtitle_tracks=[SubtitleTrack(9)])
+    assert plan.validate(args, None) == []
+    assert plan.validate(HandbrakeArgs(audio_tracks=[]), None) == [
+        "at least one audio track is required"
+    ]
 
 
 def test_tui_picker_opens_job_and_batch(conn, tmp_path, batch):
