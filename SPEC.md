@@ -249,6 +249,55 @@ The raw folder sits under the same `Name (Year)` folder. `jobs.year` /
 `jobs.tvdb_id` (and the same on `ingest_batches`) record the choice. Batch labels
 become `Show (2025) S01`. Without a year, every name is exactly as before.
 
+### Live TV recordings (v0.6)
+
+*v0.6 change (agreed with the author):* Jellyfin's DVR can hand finished
+recordings to rne, which queues them for encoding like any other job.
+
+- **Hook.** Jellyfin's "Post-processing application" runs
+  `contrib/jellyfin-postprocess.sh "{path}"` on the Jellyfin LXC. The script
+  POSTs the path to `POST /api/v1/recordings` with `Authorization: Bearer <token>`.
+  It exits non-zero on an HTTP error and appends one line per recording to a log.
+- **Config.** An `[api]` table with `token` (at least 16 characters) and
+  `recordings_root`. There's no path translation: Jellyfin and the rip VM mount
+  the recordings at the same path. Without `[api]` the endpoint answers 404. A
+  wrong token gets 401. A path outside `recordings_root`, a missing file, or an
+  unreadable `.nfo` or recording gets 422.
+- **What it is.** Jellyfin passes only the path, so everything else comes
+  from the `.nfo` files it writes (`recordings.py`):
+  - `Series/<Show>/<rec>.ts`: season and episode come from `<rec>.nfo`
+    (`<episodedetails>`). The show name comes from `<Show>/tvshow.nfo`, falling
+    back to the folder name. A year comes from `<year>`/`<premiered>` if present.
+  - `Movies/.../<rec>.ts`: title and year come from `<rec>.nfo` or `movie.nfo`,
+    falling back to a "Title (Year)" folder or file name.
+  - **Skipped, nothing queued (HTTP 200, `"status": "skipped"`):**
+    - a series recording without season and episode numbers (sports, news);
+    - a file outside `Series/` or `Movies/`;
+    - the same episode already queued or done from another recording. Use
+      Re-encode or Edit on that job instead.
+  - Sending the same path again returns the existing job (`"status": "exists"`).
+- **Library folder.** The broadcast date says nothing about a show's year, so
+  the folder is found, not guessed (`recordings.find_library_folder`):
+  1. An existing `Show (year)` if the year is known.
+  2. Otherwise an existing `Show`.
+  3. Otherwise the only existing `Show (YYYY)`.
+  4. Otherwise a new folder: `Show (year)` when a year is known, plain `Show` without one.
+
+  The year found this way also names the staging folder.
+  A missing `[library]` root means the encode stays in staging.
+- **Settings** (`plan.livetv_args`):
+  - RF 24 (`config.LIVETV_QUALITY`): broadcasts can take a higher RF than discs. The usual preset (`slow`) still applies;
+  - every audio track, copied when copy-friendly, AC3 otherwise;
+  - no subtitles, since broadcast captions travel inside the video stream;
+  - decomb only when the source is interlaced.
+- **Job.** One job per recording, at the end of the queue (priority 0). Its batch is
+  labelled `Show (2025) S01 (Live TV)`, with the recording path in the notes. The job
+  moves to the library when encoded. **The recording and its `.nfo` files are
+  never moved or deleted**, so it can always be re-encoded.
+- **`rne add-recording PATH...`** does the same from the CLI, for testing or
+  for recordings made before the hook was set up. The recordings folder comes
+  from `[api] recordings_root` or `--root`.
+
 ## Architecture overview
 
 Three independent processes coordinate through a single SQLite database:
@@ -1020,7 +1069,8 @@ CLI exits. The worker (running independently under systemd) claims the first job
   3. **`AudioTrack` invariant** — for each entry in `audio_tracks`: `bitrate` is required (positive integer) when `codec != "copy"`, and must be absent when `codec == "copy"`.
   4. **TOCTOU re-check** — after the editor closes and validation passes, the save goes through `jobs.update_job_args`, which writes only if the job is not `running`, in a single statement. If the job moved to `running` while the editor was open, the save is refused with the message `"job is now running; cannot edit"` and a non-zero exit. This guards against the race where the worker claims a queued job while the user is editing it.
 - **`rne move <id> [--to FOLDER]`** (v0.6) — queue a library move for a done job: retry a failed move, or move one that had no destination. See "Library moves".
-- **`rne cancel <id>`** — terminal removal of a queued job. Sets status to `cancelled`. CLI only — not exposed in the dashboard.
+- **`rne cancel <id>`** — terminal removal of a queued job. Sets status to `cancelled`. Also on the dashboard's job page (v0.6).
+- **`rne add-recording PATH... [--root FOLDER]`** (v0.6) — queue Jellyfin Live TV recordings; see "Live TV recordings".
 - **`rne retry <id>`** — resets any terminal-state job back to `queued`. Bumps `attempt_count`, clears progress and error fields.
 - **`rne pause`** / **`rne resume`** — toggle the global `queue_settings.paused` flag. The worker checks this between jobs.
 
@@ -1148,8 +1198,10 @@ for one job live on that job's page instead of crowding the list.
   tab is hidden. Without JavaScript a `<noscript>` meta refresh (30s) remains. The
   job page reloads itself every 15s only while that job is encoding or moving. Edit
   pages never refresh.
-- Still no JSON API: everything returns HTML, either a page or a fragment.
-  The one exception is `/queue/order`, which answers `204 No Content`.
+- Pages return HTML: a whole page or a fragment. The exceptions are `/queue/order`,
+  which answers `204 No Content`, and the recordings API
+  (`POST /api/v1/recordings`, JSON responses, bearer token), which Jellyfin
+  calls rather than a browser.
 
 ### Endpoints
 
@@ -1160,6 +1212,7 @@ for one job live on that job's page instead of crowding the list.
 | GET | `/jobs/<id>` | job page: files, chosen settings against the source's tracks, HandBrake command preview, history, all actions |
 | GET/POST | `/jobs/<id>/edit` | edit one job (naming, library destination, tracks, encode settings) |
 | GET/POST | `/batches/<id>/edit` | edit a batch's non-running jobs together; renumbers episodes from the first |
+| POST | `/api/v1/recordings` | queue a Jellyfin recording (`path=`, form or JSON; bearer token); see "Live TV recordings" |
 | GET | `/tvdb/search?q=&kind=series\|movie` | TVDB matches as an HTML fragment (edit form) |
 | POST | `/queue/order` | `ids=…` in the new order → `jobs.reorder` |
 | POST | `/jobs/<id>/top`, `/batches/<id>/top` | run this job / this batch's waiting jobs next |
@@ -1239,7 +1292,7 @@ Worker heartbeat indicator: green dot if `last_seen` within 30s, amber 30–90s,
 
 ### Auth
 
-None. Bind to `0.0.0.0:8500`, add a pihole DNS record for `rne.lan`, done. Exposing beyond the LAN is a reverse-proxy + basic-auth concern, not the app's.
+None for the pages. Bind to `0.0.0.0:8500`, add a pihole DNS record for `rne.lan`, done. Exposing beyond the LAN is a reverse-proxy + basic-auth concern, not the app's. The one exception (v0.6) is the recordings API: it accepts file paths, so it needs the `[api] token`.
 
 ### Production server
 

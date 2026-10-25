@@ -283,6 +283,48 @@ and the year:
 ctrl+t keeps the name as you typed it. Without a key everything works as
 before, and you can still type a year yourself.
 
+### Encoding Jellyfin Live TV recordings
+
+rne can pick up shows Jellyfin records and encode them like a ripped disc.
+The episode goes to the end of the queue and moves into your TV library when it's
+done. The original recording is never touched; delete it yourself once you've watched it.
+
+1. On the rip VM, add to `~/.config/rne/config.toml` and restart the dashboard:
+
+   ```toml
+   [api]
+   token = "..."                                  # e.g. `openssl rand -hex 24`
+   recordings_root = "/mnt/staging/Recordings"    # holds Series/ and Movies/
+   ```
+
+2. Copy `contrib/jellyfin-postprocess.sh` to the Jellyfin machine, e.g.
+   `/usr/local/bin/rne-postprocess.sh`, and set `RNE_URL` (the dashboard, e.g.
+   `http://<rip-vm>:8500`) and `RNE_TOKEN` at the top. The `jellyfin` user must be
+   able to read it, and since it holds the token nobody else should:
+
+   ```
+   sudo chown root:jellyfin /usr/local/bin/rne-postprocess.sh
+   sudo chmod 750 /usr/local/bin/rne-postprocess.sh
+   sudo -u jellyfin /usr/local/bin/rne-postprocess.sh   # prints its usage line
+   ```
+3. In Jellyfin: Dashboard → Live TV → DVR → **Post-processing application**:
+   the script's path. **Post-processor command line arguments**: `"{path}"`.
+
+The script logs each recording and rne's answer to
+`/var/log/jellyfin/rne-postprocess.log` (set `RNE_LOG` to change it).
+
+- **Naming.** rne reads the season and episode from the `.nfo` Jellyfin
+  writes next to each recording, and the show name from `tvshow.nfo`.
+- **Library folder.** It reuses an existing `Show (2025)` or `Show` folder in
+  your TV library. If neither exists it creates `Show`, so add the year yourself once.
+- **Skipped recordings.** Anything without season and episode numbers
+  (sports, news) is skipped.
+- **Encode settings.** RF 24, preset `slow`, every audio track kept, no
+  subtitles. Interlaced broadcasts are deinterlaced.
+
+To queue recordings by hand, for example ones made before you set this up, run
+`rne add-recording /mnt/staging/Recordings/Series/Show/*.ts`.
+
 ### Multi-episode discs
 
 Some discs (common in anime releases) pack all episodes into a single title using chapters rather than separate titles. When you select exactly one TV title — in either `rne ingest` or `rne queue` — the CLI asks:
@@ -351,7 +393,7 @@ rne probe --deep <file>    # full packet scan (slow on large Blu-rays)
 
 ## Configuration
 
-Two things come from `~/.config/rne/config.toml`: output locations, chosen per invocation — see [Choosing an output disk](#choosing-an-output-disk) — and [rip-complete notifications](#getting-notified-when-a-rip-finishes). Everything else lives as a constant in `src/rne/config.py`:
+`~/.config/rne/config.toml` holds output locations, chosen per invocation (see [Choosing an output disk](#choosing-an-output-disk)), [rip-complete notifications](#getting-notified-when-a-rip-finishes), [TVDB lookup](#looking-names-up-on-tvdb), [library moves](#moving-encodes-into-the-library) and the [Live TV recordings API](#encoding-jellyfin-live-tv-recordings). Everything else lives as a constant in `src/rne/config.py`:
 
 | Constant | Default | Notes |
 |---|---|---|
@@ -360,6 +402,7 @@ Two things come from `~/.config/rne/config.toml`: output locations, chosen per i
 | `RNE_DB` | `~/.local/state/rne/jobs.db` | Override with `RNE_DB` env var |
 | `COPY_FRIENDLY_AUDIO_CODECS` | `ac3, eac3, aac, mp3, opus` | Tracks with these codecs are copied; others trigger a transcode prompt |
 | `AC3_BITRATE_BY_CHANNELS` | 96/192/640 kbps | Recommended AC3 bitrate by channel count |
+| `LIVETV_QUALITY` | `24` | RF for Jellyfin Live TV recordings (discs use 20) |
 | `DEFAULT_PRESET` | `slow` | Preset default for Blu-ray (non-DVD) sources |
 | `DEFAULT_PRESET_DVD` | `medium` | Preset default for DVD sources |
 | `RIP_RETRIES` | `1` | Automatic retries when a title rip fails; override with `RNE_RIP_RETRIES` env var (clamped to 0–10) |

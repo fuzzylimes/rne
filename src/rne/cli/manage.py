@@ -133,3 +133,45 @@ def run_resume(_args) -> None:
     conn.execute("UPDATE queue_settings SET paused = 0 WHERE id = 1")
     conn.commit()
     print("Queue resumed.")
+
+
+def run_add_recording(args, roots) -> None:
+    """Queue Live TV recordings by path; the same rules as POST /api/v1/recordings."""
+    from rne import config, recordings
+    from rne.cli.ingest import library_or_exit
+
+    if args.root:
+        root = pathlib.Path(args.root).expanduser()
+    else:
+        try:
+            api = config.load_api_config()
+        except config.ConfigError as exc:
+            print(f"Config error: {exc}", file=sys.stderr)
+            sys.exit(2)
+        if api is None:
+            print("No recordings folder: pass --root, or set [api] recordings_root "
+                  "in the config.", file=sys.stderr)
+            sys.exit(2)
+        root = api.recordings_root
+    if not root.is_absolute():
+        print("--root needs an absolute path.", file=sys.stderr)
+        sys.exit(2)
+    library = library_or_exit()
+    conn = db.connect()
+    db.init_db(conn)
+    failed = False
+    for raw in args.paths:
+        path = pathlib.Path(raw).expanduser().absolute()
+        try:
+            out = recordings.enqueue(conn, path, recordings_root=root,
+                                     staging_root=roots.staging_root, library=library)
+        except recordings.RecordingError as exc:
+            print(f"{path}: {exc}", file=sys.stderr)
+            failed = True
+            continue
+        if out.status == "queued":
+            print(f"{path.name}: queued as job {out.job_id} ({out.label}).")
+        else:
+            print(f"{path.name}: {out.status}, {out.reason}.")
+    if failed:
+        sys.exit(1)

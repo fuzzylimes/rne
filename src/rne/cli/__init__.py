@@ -153,6 +153,18 @@ def _build_parser() -> argparse.ArgumentParser:
              "(default: the job's destination, or the [library] root)",
     )
 
+    rec_p = sub.add_parser(
+        "add-recording",
+        help="Queue Jellyfin Live TV recordings (what the dashboard API does)",
+    )
+    rec_p.add_argument("paths", nargs="+", metavar="PATH", help="Recording file(s), e.g. .ts")
+    rec_p.add_argument(
+        "--root", metavar="FOLDER",
+        help="Recordings folder holding Series/ and Movies/ "
+             "(default: [api] recordings_root in the config)",
+    )
+    _add_disk_flags(rec_p)
+
     sub.add_parser("pause", help="Pause the global queue")
     sub.add_parser("resume", help="Resume the global queue")
 
@@ -212,6 +224,10 @@ def main() -> None:
         from rne.cli.manage import run_move
 
         run_move(args)
+    elif args.command == "add-recording":
+        from rne.cli.manage import run_add_recording
+
+        run_add_recording(args, _resolve_roots_or_exit(args))
     elif args.command == "pause":
         from rne.cli.manage import run_pause
 

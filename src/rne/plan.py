@@ -141,6 +141,28 @@ def default_args(summary: StreamSummary, is_dvd: bool = False) -> HandbrakeArgs:
     )
 
 
+def livetv_args(summary: StreamSummary) -> HandbrakeArgs:
+    """Settings for a Jellyfin Live TV recording (queued through the API).
+
+    RF config.LIVETV_QUALITY (higher than discs) at the usual slow preset.
+    Every audio track is kept (broadcasts often put stereo first and 5.1
+    second), copied when it plays everywhere and AC3 otherwise. No
+    subtitles: broadcast captions ride inside the video stream. Interlaced
+    broadcasts (1080i) are deinterlaced with decomb.
+    """
+    audio = [recommended_audio(stream, n) for n, stream in enumerate(summary.audio, 1)]
+    return HandbrakeArgs(
+        encoder=config.DEFAULT_ENCODER,
+        quality=config.LIVETV_QUALITY,
+        preset=config.DEFAULT_PRESET,
+        audio_tracks=audio or [AudioTrack(track=1)],
+        subtitle_tracks=[],
+        detelecine=False,
+        decomb=is_interlaced(summary),
+        tune=config.DEFAULT_TUNE,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Labels for pickers
 # ---------------------------------------------------------------------------

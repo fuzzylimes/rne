@@ -27,6 +27,9 @@ HANDBRAKE_PREFIX = ["flatpak", "run", "--command=HandBrakeCLI", "fr.handbrake.gh
 
 DEFAULT_ENCODER = "x265"
 DEFAULT_QUALITY = 20
+# Jellyfin Live TV recordings (1080i/720p broadcasts): a higher RF than discs
+# keeps the files small; the slow preset still applies.
+LIVETV_QUALITY = 24
 DEFAULT_PRESET = "slow"
 # DVD sources encode fast enough that "slow" buys little; default to "medium".
 DEFAULT_PRESET_DVD = "medium"
@@ -99,7 +102,9 @@ class DiskConfig:
 
 _EMPTY_DISK_CONFIG = DiskConfig(default_disk=None, disks={})
 
-_TOP_LEVEL_KEYS = frozenset({"default_disk", "disks", "notifications", "tvdb", "library"})
+_TOP_LEVEL_KEYS = frozenset(
+    {"default_disk", "disks", "notifications", "tvdb", "library", "api"}
+)
 _DISK_KEYS = frozenset({"media_root", "staging_root"})
 
 
@@ -490,6 +495,59 @@ def load_tvdb_config(path: str | Path | None = None) -> tuple[TvdbConfig | None,
         cache_ttl_days=ttl,
         pin=raw["pin"].strip() if "pin" in raw else None,
     ), None
+
+
+# ---------------------------------------------------------------------------
+# Recordings API
+#
+# Optional [api] table. With it, the dashboard accepts finished Jellyfin
+# Live TV recordings at POST /api/v1/recordings; without it, the endpoint is
+# off. The token keeps the endpoint from being open to anyone on the network,
+# and only files under recordings_root are accepted.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ApiConfig:
+    token: str
+    recordings_root: Path
+
+
+_API_KEYS = frozenset({"token", "recordings_root"})
+_MIN_TOKEN_LENGTH = 16
+
+
+def load_api_config(path: str | Path | None = None) -> ApiConfig | None:
+    """Load [api]. None when there is no table (the API is off).
+
+    A table missing a key, or with a bad value, raises ConfigError: a
+    half-configured API is a mistake worth hearing about.
+    """
+    config_file = Path(path) if path is not None else Path(CONFIG_PATH)
+    data = _read_toml(config_file)
+    if data is None or "api" not in data:
+        return None
+    raw = data["api"]
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{config_file}: 'api' must be a table")
+    unknown = sorted(set(raw) - _API_KEYS)
+    if unknown:
+        raise ConfigError(f"{config_file}: [api]: unknown key(s): {', '.join(unknown)}")
+    for key in sorted(_API_KEYS):
+        if key not in raw:
+            raise ConfigError(f"{config_file}: [api]: {key} is required")
+        if not isinstance(raw[key], str) or not raw[key].strip():
+            raise ConfigError(f"{config_file}: [api]: {key} must be a non-empty string")
+    token = raw["token"].strip()
+    if len(token) < _MIN_TOKEN_LENGTH:
+        raise ConfigError(
+            f"{config_file}: [api]: token must be at least {_MIN_TOKEN_LENGTH} characters "
+            "(e.g. the output of `openssl rand -hex 24`)"
+        )
+    root = Path(raw["recordings_root"].strip()).expanduser()
+    if not root.is_absolute():
+        raise ConfigError(f"{config_file}: [api]: recordings_root must be an absolute path")
+    return ApiConfig(token=token, recordings_root=root)
 
 
 def resolve_roots(

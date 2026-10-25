@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import datetime
+import hmac
+import pathlib
 import shlex
 from urllib.parse import quote
 
@@ -9,6 +11,7 @@ from flask import (
     abort,
     flash,
     g,
+    jsonify,
     redirect,
     render_template,
     request,
@@ -407,6 +410,43 @@ def register(app: Flask) -> None:
             ids = jobs.batch_job_ids(g.conn, batch_id)
         return _edit(ids, action=f"/batches/{batch_id}/edit?next={quote(back)}", cancel_url=back,
                      heading=f"Edit batch: {batch['label']}")
+
+    # -- recordings API -------------------------------------------------------------
+
+    @app.route("/api/v1/recordings", methods=["POST"])
+    def api_recordings():
+        """Queue a finished Jellyfin Live TV recording. Form or JSON: path=..."""
+        from rne import recordings
+
+        try:
+            api = config.load_api_config()
+        except config.ConfigError as exc:
+            return jsonify(error=f"config error: {exc}"), 500
+        if api is None:
+            return jsonify(error="the recordings API is off: add an [api] table to the config"), 404
+        auth = request.headers.get("Authorization", "")
+        token = auth.removeprefix("Bearer ").strip() if auth.startswith("Bearer ") else ""
+        if not hmac.compare_digest(token.encode(), api.token.encode()):
+            return jsonify(error="missing or wrong token"), 401
+
+        body = request.get_json(silent=True) if request.is_json else None
+        raw_path = (body or {}).get("path") if body else request.form.get("path")
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            return jsonify(error="path is required"), 400
+        try:
+            roots = config.resolve_roots()
+            outcome = recordings.enqueue(
+                g.conn, pathlib.Path(raw_path.strip()), recordings_root=api.recordings_root,
+                staging_root=roots.staging_root, library=config.load_library_config(),
+            )
+        except config.ConfigError as exc:
+            return jsonify(error=f"config error: {exc}"), 500
+        except recordings.RecordingError as exc:
+            return jsonify(error=str(exc)), 422
+        app.logger.info("recording %s: %s %s", raw_path, outcome.status,
+                        outcome.reason or outcome.job_id)
+        payload = {k: v for k, v in vars(outcome).items() if v not in (None, "")}
+        return jsonify(payload), 201 if outcome.status == "queued" else 200
 
     @app.route("/tvdb/search")
     def tvdb_search():
