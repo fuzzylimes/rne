@@ -726,7 +726,7 @@ rne/
 ```toml
 [project]
 name = "rne"
-version = "0.5.0"
+version = "0.6.0"
 requires-python = ">=3.12"
 dependencies = ["flask>=3.0", "textual>=8.2"]
 

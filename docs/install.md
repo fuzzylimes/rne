@@ -77,14 +77,14 @@ On the Mac (build machine):
 
 ```bash
 uv build
-# Produces dist/rne-0.5.0-py3-none-any.whl
-rsync -av dist/rne-0.5.0-py3-none-any.whl rip@rip.lan:~/
+# Produces dist/rne-0.6.0-py3-none-any.whl
+rsync -av dist/rne-0.6.0-py3-none-any.whl rip@rip.lan:~/
 ```
 
 On the VM:
 
 ```bash
-pipx install ~/rne-0.5.0-py3-none-any.whl
+pipx install ~/rne-0.6.0-py3-none-any.whl
 ```
 
 Verify all three entry points landed in `~/.local/bin/`:
@@ -201,6 +201,16 @@ pipx install --force ~/rne-<version>.whl
 rne service install          # only needed when unit files changed
 systemctl --user restart rne-worker rne-dashboard
 ```
+
+Upgrade between jobs: `rne pause`, wait for the running encode to finish,
+upgrade and restart, then `rne resume`. Restarting the worker mid-encode marks
+that job interrupted (Retry picks it up again).
+
+**0.5 → 0.6:** the unit files are unchanged, so `rne service install` isn't
+needed. The database upgrades itself the first time the new worker or
+dashboard starts, and 0.5 can still read it. Three new config tables are all
+optional: `[tvdb]` (name lookup), `[library]` (move finished encodes into the
+library) and `[api]` (Jellyfin Live TV recordings). See the README.
 
 ---
 

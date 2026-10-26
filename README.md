@@ -17,10 +17,10 @@ See [docs/install.md](docs/install.md) for the full prerequisite checklist and s
 ```bash
 # Build on Mac, copy wheel to VM
 uv build
-rsync -av dist/rne-0.5.0-py3-none-any.whl rip@rip:~/
+rsync -av dist/rne-0.6.0-py3-none-any.whl rip@rip:~/
 
 # On VM: install and set up services
-pipx install ~/rne-0.5.0-py3-none-any.whl
+pipx install ~/rne-0.6.0-py3-none-any.whl
 rne service install
 loginctl enable-linger rip
 systemctl --user enable --now rne-worker rne-dashboard
@@ -457,7 +457,7 @@ the dashboard; fix the cause and run `rne move <id>` or press **Retry move**.
 uv sync             # install deps including dev group
 uv run pytest       # run tests
 uv run ruff check   # lint
-uv build            # build wheel → dist/rne-0.5.0-py3-none-any.whl
+uv build            # build wheel → dist/rne-0.6.0-py3-none-any.whl
 ```
 
 Tests use in-memory SQLite; no external binaries required.
